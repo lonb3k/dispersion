@@ -1,5 +1,9 @@
 # Equity Dispersion: implied vs realized correlation on the S&P 500
 
+**Live morning sheet: [https://morning-sheet-nine.vercel.app/dispersion](https://morning-sheet-nine.vercel.app/dispersion)**, regenerated every weekday after the US close.
+
+![morning sheet](docs/morning_sheet.gif)
+
 Streamlit app that rebuilds the CBOE implied correlation index from live option chains,
 compares it with the realized correlation of the basket since 2006, and backtests the
 correlation leg of a dispersion trade. Free data only, so anyone can rerun it.
@@ -117,6 +121,22 @@ replication and a 90-day implied correlation that the CBOE does not publish.
 - Weights: SPY holdings file from State Street, `data/spy_holdings.xlsx`, top 50 to `data/weights_top50.csv`.
 - Implied correlation history: CBOE public CSV endpoint for COR1M, COR3M and VIX, since 2006.
 - Option chains: Yahoo, delayed. Outside US hours most quotes fall back to last trades and the app says so.
+
+
+## Morning sheet
+
+`src/dispersion/sheet.py` reads the dashboard for you: it runs the functions above on the
+latest close and returns a desk note as a plain dict (tiles with sparklines, sentences with the
+numbers filled in, trade ideas ranked by historical conditional expectation divided by the
+historical worst case in the same regime, and the Plotly figures as JSON). It covers COR1M against our 50-chain implied correlation and realized correlation, the vega-weighted book at trailing vols, and a ranked correlation-swap / dispersion-book / crash-hedge call with conditional expectation and worst case.
+
+- `python scripts/build_sheet.py [--offline]` writes `sheet/latest.json`.
+- The daily GitHub Actions workflow rebuilds it after the close and commits it.
+- The front end ([lonb3k/morning-sheet](https://github.com/lonb3k/morning-sheet), Next.js on Vercel)
+  reads that JSON and renders it at [https://morning-sheet-nine.vercel.app/dispersion](https://morning-sheet-nine.vercel.app/dispersion), next to the sheets of the
+  two sister projects. The Streamlit app stays the full interactive version.
+
+No financial logic lives in `sheet.py`: every number comes from a function that already exists in `src/`.
 
 ## Run it
 
