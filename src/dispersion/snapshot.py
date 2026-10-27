@@ -28,11 +28,12 @@ def atm_iv(ticker: str, target_days: int) -> dict:
 
 
 def implied_snapshot(weights: pd.DataFrame, target_days: int = 30, offline: bool = False,
-                     progress=None) -> tuple[pd.DataFrame, dict]:
-    """Returns (per-name table, summary). Summary has index_iv, rho_implied, avg_single_iv, dispersion."""
+                     progress=None, force: bool = False) -> tuple[pd.DataFrame, dict]:
+    """Returns (per-name table, summary). Summary has index_iv, rho_implied, avg_single_iv, dispersion.
+    A same-day snapshot file is reused unless `force=True` (chains take about two minutes to read)."""
     today = date.today().isoformat()
     path = DATA_DIR / f"implied_snapshot_{today}_{target_days}d.csv"
-    if offline and path.exists():
+    if path.exists() and not force:
         table = pd.read_csv(path)
     else:
         rows = []
@@ -48,6 +49,8 @@ def implied_snapshot(weights: pd.DataFrame, target_days: int = 30, offline: bool
                 progress((i + 1) / len(tickers), t)
         table = pd.DataFrame(rows)
         table.to_csv(path, index=False)
+    if "earnings" in table:
+        table["earnings"] = pd.to_datetime(table["earnings"], errors="coerce")
 
     # realized 21d vol per name for the IV - RV column
     px = load_prices(list(weights["ticker"]) + ["SPY"], start="2024-01-01", offline=offline)
