@@ -1,0 +1,27 @@
+name: Daily implied correlation snapshot
+
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python scripts/snapshot_implied_corr.py
+      - name: Commit history
+        run: |
+          git config user.name "corr-bot"
+          git config user.email "corr-bot@users.noreply.github.com"
+          git add data/implied_corr_history.csv data/implied_snapshot_*.csv data/weights_top50.csv
+          git diff --cached --quiet || git commit -m "Implied correlation snapshot $(date -u +%F)"
+          git push
