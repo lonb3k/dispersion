@@ -21,8 +21,9 @@ def _flatten(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_prices(tickers: list[str], start: str = "2010-01-01", offline: bool = False) -> pd.DataFrame:
-    """Adjusted closes, one column per ticker. Cached in data/prices.csv."""
-    path = DATA_DIR / "prices.csv"
+    """Adjusted closes, one column per ticker. Cached per start date in data/prices_<start>.csv so a
+    short request (the daily snapshot needs 2024+) never clobbers the long history."""
+    path = DATA_DIR / f"prices_{start}.csv"
     if offline and path.exists():
         cached = pd.read_csv(path, index_col=0, parse_dates=True)
         have = [t for t in tickers if t in cached]

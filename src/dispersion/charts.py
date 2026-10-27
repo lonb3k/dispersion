@@ -144,3 +144,87 @@ def heatmap(corr: pd.DataFrame) -> go.Figure:
                              colorbar=dict(title="rho", thickness=12), hovertemplate="%{y} / %{x}: %{z:.2f}"))
     fig.update_layout(margin=dict(l=60, r=24, t=60, b=80))
     return fig
+
+
+# ---------- trade sheet ----------
+
+def scenario_heatmap(grid: pd.DataFrame) -> go.Figure:
+    fig = _base("Book P&L to expiry, vol points per unit index vega: realized correlation × single-name realization", height=420,
+                hovermode="closest", xaxis=dict(title="k = single-name realized / implied", showgrid=False, type="category"),
+                yaxis=dict(title="Realized correlation", showgrid=False, type="category", autorange="reversed", ticksuffix=""))
+    z = grid.values.astype(float)
+    lim = float(np.nanmax(np.abs(z)))
+    fig.add_trace(go.Heatmap(z=z, x=list(grid.columns), y=list(grid.index), zmin=-lim, zmax=lim,
+                             colorscale=[[0, C["red"]], [0.5, "#fcfcfb"], [1, C["aqua"]]],
+                             text=np.round(z, 1), texttemplate="%{text:+.1f}", textfont=dict(size=11),
+                             colorbar=dict(title="pts", thickness=12), hovertemplate="%{y}, %{x}: %{z:+.1f} pts"))
+    return fig
+
+
+def legs_bar(legs: pd.DataFrame) -> go.Figure:
+    d = legs.sort_values("vega_weight", ascending=False).head(30)
+    fig = _base("Long single-name variance legs: vega weight (bar) and IV − trailing RV (color)", height=380, hovermode="closest",
+                xaxis=dict(showgrid=False, type="category"), yaxis=dict(gridcolor=GRID, zeroline=False, tickformat=".0%", ticksuffix=""))
+    colors = [C["aqua"] if v >= 0 else C["red"] for v in d["iv_minus_rv"]]
+    fig.add_trace(go.Bar(x=d["ticker"], y=d["vega_weight"], marker=dict(color=colors, line=dict(width=0)), name="vega weight",
+                         customdata=d[["atm_iv", "rv21", "iv_minus_rv"]].values,
+                         hovertemplate="%{x}: vega %{y:.1%}  IV %{customdata[0]:.1f}%  RV %{customdata[1]:.1f}%  (%{customdata[2]:+.1f})"))
+    fig.update_layout(showlegend=False, bargap=0.25)
+    return fig
+
+
+# ---------- factors ----------
+
+def group_corr_lines(gc: pd.DataFrame) -> go.Figure:
+    fig = _base("Average pairwise realized correlation, 63d rolling", height=360,
+                yaxis=dict(gridcolor=GRID, zeroline=False, tickformat=".0%", ticksuffix=""))
+    for i, (col, name) in enumerate([("within_mag7", "Within Mag 7"), ("within_rest", "Within the other names"),
+                                     ("cross", "Mag 7 vs the rest"), ("all", "All pairs")]):
+        fig.add_trace(go.Scatter(x=gc.index, y=gc[col], name=name, mode="lines", line=dict(width=1.5, color=SERIES[i]),
+                                 hovertemplate="%{y:.0%}"))
+    return fig
+
+
+def variance_share_lines(vs: pd.DataFrame) -> go.Figure:
+    fig = _base("Mag 7: share of basket variance vs share of basket weight", height=320,
+                yaxis=dict(gridcolor=GRID, zeroline=False, tickformat=".0%", ticksuffix=""))
+    fig.add_trace(go.Scatter(x=vs.index, y=vs["mag7_variance_share"], name="Share of variance", mode="lines",
+                             line=dict(width=2, color=C["orange"]), hovertemplate="%{y:.0%}"))
+    fig.add_trace(go.Scatter(x=vs.index, y=vs["mag7_weight"], name="Share of weight (today's, fixed)", mode="lines",
+                             line=dict(width=1.5, color=C["blue"], dash="dot"), hovertemplate="%{y:.0%}"))
+    return fig
+
+
+def factor_vs_implied(al: pd.DataFrame) -> go.Figure:
+    fig = _base("First principal component share of variance (252d) vs implied correlation (COR1M)", height=340,
+                yaxis=dict(gridcolor=GRID, zeroline=False, tickformat=".0%", ticksuffix=""))
+    fig.add_trace(go.Scatter(x=al.index, y=al["factor"], name="PC1 share", mode="lines", line=dict(width=1.8, color=C["blue"]), hovertemplate="%{y:.0%}"))
+    fig.add_trace(go.Scatter(x=al.index, y=al["implied"], name="COR1M", mode="lines", line=dict(width=1.3, color=C["red"]), hovertemplate="%{y:.0%}"))
+    return fig
+
+
+# ---------- convexity ----------
+
+def convexity_scatter(fit: dict) -> go.Figure:
+    d = fit["data"].sort_values("spx_ret_pct")
+    fig = _base("Monthly short-correlation P&L vs S&P return over the same month", height=380, hovermode="closest",
+                xaxis=dict(title="S&P 500 return over the trade (%)", showgrid=False, ticksuffix="%"),
+                yaxis=dict(gridcolor=GRID, zeroline=True, zerolinecolor=MUTED, ticksuffix=" pts", title="Correlation swap P&L"))
+    fig.add_trace(go.Scatter(x=d["spx_ret_pct"], y=d["corr_pnl_pts"], mode="markers", name="trades",
+                             marker=dict(size=6, color=C["blue"], opacity=0.5), customdata=d.index.strftime("%b %Y"),
+                             hovertemplate="%{customdata}: %{y:+.1f} pts at %{x:+.1f}%"))
+    r = d["spx_ret_pct"].values
+    line = fit["intercept"] + fit["slope_up"] * r + fit["extra_slope_down"] * np.minimum(r, 0)
+    fig.add_trace(go.Scatter(x=r, y=line, mode="lines", name="fit: a + b·r + c·min(r,0)", line=dict(width=2, color=C["red"]), hoverinfo="skip"))
+    return fig
+
+
+def corr_vs_put_paths(fit: dict) -> go.Figure:
+    d = fit["data"]
+    fig = _base("Cumulative P&L, both scaled to unit standard deviation: correlation swap vs short 15-delta put", height=340,
+                yaxis=dict(gridcolor=GRID, zeroline=True, zerolinecolor=MUTED, ticksuffix=""))
+    a = (d["corr_pnl_pts"] / d["corr_pnl_pts"].std()).cumsum()
+    b = (d["put_pnl_pct"] / d["put_pnl_pct"].std()).cumsum()
+    fig.add_trace(go.Scatter(x=d.index, y=a, name="Short correlation", mode="lines", line=dict(width=1.8, color=C["blue"]), hovertemplate="%{y:.1f}"))
+    fig.add_trace(go.Scatter(x=d.index, y=b, name="Short 15d put", mode="lines", line=dict(width=1.8, color=C["orange"]), hovertemplate="%{y:.1f}"))
+    return fig

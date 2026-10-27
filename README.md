@@ -26,13 +26,35 @@ A short one-month correlation swap at the COR1M strike, rolled monthly, wins mos
 takes its worst hit in February 2020 (about 40 correlation points). The app reports gross
 figures and says so: no bid-ask, frozen basket, Sharpe as an upper bound.
 
+**4. The book, priced: a vega-weighted dispersion trade is flat at the implied correlation and dies in the crash corner.**
+`tradesheet.py` builds the long-singles / short-index variance book from today's 50 chains and
+sweeps realized correlation against how much single names realize relative to their implied.
+At today's trailing vols the book would lose about 4 points: single-name vol is priced for
+earnings that have not printed yet. The trade only pays if the prints move the stocks.
+
+**5. Implied correlation is at record lows because the index became a few uncorrelated giants.**
+`factors.py`: the Mag 7 are 54% of the basket's weight and 66% of its variance, their pairwise
+correlation (20%) is three times that of the other names (7%), and the share of variance
+explained by the first principal component fell from 40-45% in 2020-2022 to 20% today.
+That share and COR1M move together (correlation +0.60 since 2015). Weak market factor, cheap
+index options, low implied correlation: the premium collapse of 2024-2025 is structural.
+
+**6. Selling correlation is selling an index put.**
+`convexity.py` regresses the monthly correlation-swap P&L on the S&P return of the same month:
+positive slope, steeper on the downside, and the P&L path tracks a short 15-delta put sold at the
+VIX. Since 2015, in the 21 months where the index fell more than 3%, the swap lost about 2 points
+against +12 on average, and the put lost 0.8% of spot against +0.2%. Price it, size it and hedge
+it like crash insurance.
+
 ## What the app shows
 
 | Tab | Content |
 |---|---|
+| **Trade sheet** | The vega-weighted book from today's chains, breakeven correlation, scenario grid (realized correlation × single-name realization), P&L at trailing vols, dollar view |
+| **Why so low** | Mag 7 vs the rest: pairwise correlations, share of variance vs share of weight, first principal component share against COR1M |
 | **Today** | Per-name 30/60/90d ATM implied vol vs 21d realized, earnings flags, our implied correlation next to the CBOE print, implied dispersion |
 | **Implied vs realized** | COR1M vs realized correlation over the next 21 days since 2006, premium by year and by VIX regime |
-| **Correlation swap backtest** | Monthly short correlation at the COR1M strike: cumulative P&L, drawdown, hit ratio, worst trades |
+| **Correlation swap backtest** | Monthly short correlation at the COR1M strike: cumulative P&L, drawdown, hit ratio, worst trades, and the short-put comparison |
 | **Mechanics** | Index vol as a function of correlation with today's single-name IVs, realized index vol vs average single vol, COR1M vs COR3M term structure, pairwise correlation heatmap |
 
 ## The identity
@@ -66,13 +88,18 @@ rho leg with a correlation swap.
 - **Non-overlapping monthly trades** in the backtest so the hit ratio and Sharpe are not
   inflated by daily overlapping observations.
 
+- **Scenario grid in two dimensions**, not a single "what if correlation goes to X": a crash raises
+  single-name vol and correlation together, and the book's loss depends on both.
+- **Put sold at the VIX without skew.** The comparison is about the shape of the payoff, not the
+  level of the premium; adding skew would only make the put richer.
+
 ## Tests
 
 ```bash
 .venv/bin/python -m pytest -q tests
 ```
 
-Seven tests: the identity round-trips for any rho; index vol equals the weighted average single
+Thirteen tests. Among them: the identity round-trips for any rho; index vol equals the weighted average single
 vol at rho = 1; the realized estimator recovers the factor correlation of a simulated one-factor
 market; names listing mid-sample are handled; the backtest P&L equals strike minus realized;
 Black-76 round-trips price to IV and recovers the forward and ATM vol from a synthetic chain.
@@ -109,6 +136,9 @@ src/dispersion/
   correlation.py               the identity, realized correlation history, pairwise matrix
   snapshot.py                  today's implied correlation from 50 chains
   backtest.py                  correlation risk premium, correlation swap backtest, regime tables
+  tradesheet.py                vega-weighted book, scenario grid, breakeven correlation
+  factors.py                   Mag 7 vs rest correlations, variance shares, first principal component
+  convexity.py                 short put simulation, convexity fit of the swap P&L
   charts.py                    Plotly figures
 scripts/snapshot_implied_corr.py
 tests/

@@ -15,7 +15,7 @@ import streamlit as st
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from dispersion import backtest as bt, charts  # noqa: E402
+from dispersion import backtest as bt, charts, convexity as cx, factors as fa, tradesheet as ts  # noqa: E402
 from dispersion.correlation import pairwise_correlation_matrix, realized_correlation_history  # noqa: E402
 from dispersion.data import load_cboe_index, load_prices  # noqa: E402
 from dispersion.snapshot import implied_snapshot  # noqa: E402
@@ -45,6 +45,14 @@ def snapshot(top_n: int, target_days: int, offline: bool):
     return implied_snapshot(w, target_days, offline=offline)
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def factor_views(tickers: tuple[str, ...], start: str, offline: bool):
+    w = load_weights(len(tickers))
+    px = load_prices(list(tickers) + ["SPY"], start=start, offline=offline)
+    sub = px[[t for t in tickers if t in px]]
+    return (fa.group_correlations(sub), fa.variance_shares(sub, w.set_index("ticker")["weight"]), fa.first_factor_share(sub))
+
+
 def fmt(x, suffix="%", d=1):
     return "n/a" if x is None or pd.isna(x) else f"{x:.{d}f}{suffix}"
 
@@ -70,7 +78,7 @@ st.title("Equity dispersion: is correlation too expensive?")
 st.caption(f"Basket: top {top_n} S&P 500 names covering {w['index_weight'].sum()*100:.0f}% of the index, re-weighted to 100%. "
            f"Last price {px.index[-1].date()}, last COR1M {cor1m.index[-1].date()}.")
 
-tabs = st.tabs(["Today", "Implied vs realized", "Correlation swap backtest", "Mechanics"])
+tabs = st.tabs(["Today", "Trade sheet", "Why so low", "Implied vs realized", "Correlation swap backtest", "Mechanics"])
 
 # ---------- Today ----------
 with tabs[0]:
@@ -101,8 +109,69 @@ with tabs[0]:
         st.dataframe(show.round(3), use_container_width=True, hide_index=True,
                      column_config={"weight": st.column_config.NumberColumn(format="%.2%")})
 
-# ---------- Implied vs realized ----------
+
+# ---------- Trade sheet ----------
 with tabs[1]:
+    st.subheader("The dispersion book, vega-weighted, with today's implied vols")
+    c1, c2, c3 = st.columns([1, 1, 1])
+    excl = c1.toggle("Exclude names with earnings inside the tenor", value=False)
+    vega_notional = c2.number_input("Index vega notional ($ per vol point)", 10_000, 10_000_000, 100_000, step=10_000)
+    legs, book = ts.build_book(names, summ["index_iv"], exclude_earnings=excl)
+    if book["legs"] < 20:
+        st.warning(f"Only {book['legs']} legs left: the implied correlation of a basket that small is not meaningful. Untoggle to see the full book.")
+    be = ts.breakeven_correlation(legs, summ["index_iv"], 1.0)
+    be11 = ts.breakeven_correlation(legs, summ["index_iv"], 1.1)
+    carry = ts.expected_pnl_at_trailing(legs, summ["index_iv"], summ["index_rv21"])
+    c = st.columns(5)
+    c[0].metric("Legs", book["legs"], f"Mag 7 = {book['mag7_vega_share']*100:.0f}% of vega", delta_color="off")
+    c[1].metric("Implied spread", fmt(book["spread_pts"], " pts"), "avg single IV − index IV", delta_color="off")
+    c[2].metric("Breakeven correlation", fmt(be * 100), f"{be11*100:.1f}% if singles realize +10%", delta_color="off")
+    c[3].metric("P&L at trailing vols", fmt(carry["total_pts"], " pts"), f"singles {carry['single_legs_pts']:+.1f}, index {carry['index_leg_pts']:+.1f}", delta_color="off")
+    c[4].metric("Same in dollars", f"${ts.dollar_view(carry['total_pts'], vega_notional):,.0f}", f"on ${vega_notional:,.0f} vega", delta_color="off")
+    st.plotly_chart(charts.scenario_heatmap(ts.scenario_grid(legs, summ["index_iv"])), use_container_width=True)
+    st.markdown(
+        f"**Reading the grid.** Long single-name variance, short index variance, vega-neutral. The book is flat on the diagonal where realized "
+        f"correlation equals the implied {book['rho_implied']*100:.1f}% and singles realize their implied (k = 1). It makes money when singles move "
+        "more than priced (earnings, idiosyncratic news) or when correlation stays low; it loses when correlation jumps, and the loss accelerates "
+        "with k because a crash raises single-name vol *and* correlation at once, so the index leg loses faster than the single legs gain. "
+        f"At today's trailing realized vols the book would make **{carry['total_pts']:+.1f} pts**: single names are realizing "
+        f"{-carry['single_legs_pts']:.1f} pts below their implied because earnings are priced but not yet printed. The trade only pays if the prints move the stocks."
+    )
+    st.plotly_chart(charts.legs_bar(legs), use_container_width=True)
+    with st.expander("Legs"):
+        st.dataframe(legs[["ticker", "name", "sector", "vega_weight", "atm_iv", "rv21", "iv_minus_rv", "rr25", "earnings"]].round(3),
+                     use_container_width=True, hide_index=True, column_config={"vega_weight": st.column_config.NumberColumn(format="%.2%")})
+
+# ---------- Why so low ----------
+with tabs[2]:
+    st.subheader("Why implied correlation sits at record lows: the index became a few uncorrelated giants")
+    with st.spinner("Rolling correlations and principal components..."):
+        gc, vs, pc = factor_views(tuple(w["ticker"]), "2010-01-01", offline)
+    gc_ = gc[gc.index >= pd.Timestamp(bt_start)]
+    vs_ = vs[vs.index >= pd.Timestamp(bt_start)]
+    last = gc.iloc[-1]
+    c = st.columns(4)
+    c[0].metric("Within Mag 7", fmt(last["within_mag7"] * 100), "63d pairwise", delta_color="off")
+    c[1].metric("Within the other names", fmt(last["within_rest"] * 100))
+    c[2].metric("Mag 7 vs the rest", fmt(last["cross"] * 100))
+    c[3].metric("Mag 7 share of basket variance", fmt(vs.iloc[-1]["mag7_variance_share"] * 100), f"for {vs.iloc[-1]['mag7_weight']*100:.0f}% of weight", delta_color="off")
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(charts.group_corr_lines(gc_), use_container_width=True)
+    c2.plotly_chart(charts.variance_share_lines(vs_), use_container_width=True)
+    al = fa.align_with_implied(pc, cor1m)
+    al_ = al[al.index >= pd.Timestamp(bt_start)]
+    st.plotly_chart(charts.factor_vs_implied(al_), use_container_width=True)
+    st.markdown(
+        f"The first principal component explains **{al.iloc[-1]['factor']*100:.0f}%** of the basket's return variance today, against 35-45% in "
+        f"2020-2022. Correlation between that share and COR1M since {al_.index[0].year}: **{al_.corr().iloc[0,1]:+.2f}**. "
+        "When one factor drives the market, index options are expensive relative to single names and implied correlation is high. "
+        "Today the giants trade on their own stories (AI capex, autos, ads), the market factor is weak, and the index is cheap insurance. "
+        "That is the structural reason the dispersion premium collapsed in 2024-2025, and the reason a reversal (one macro shock that "
+        "re-couples the Mag 7) is the trade's real risk."
+    )
+
+# ---------- Implied vs realized ----------
+with tabs[3]:
     crp = crp_full[crp_full.index >= pd.Timestamp(bt_start)]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Avg implied (COR1M)", fmt(crp["implied"].mean() * 100))
@@ -130,7 +199,7 @@ with tabs[1]:
     )
 
 # ---------- Backtest ----------
-with tabs[2]:
+with tabs[4]:
     crp = crp_full[crp_full.index >= pd.Timestamp(bt_start)]
     trades = bt.correlation_swap_backtest(crp)
     stats = bt.backtest_stats(trades)
@@ -152,11 +221,25 @@ with tabs[2]:
         "and the basket is frozen (see the survivorship caveat). The Sharpe is an upper bound, and the losses in "
         f"{stats['worst_trade_date'].strftime('%B %Y')} are what a real book would feel first."
     )
+    st.markdown("#### Short correlation is a short put on the index")
+    puts = cx.put_sale_pnl(px["SPY"], vix, trades.index)
+    fit = cx.convexity_fit(trades, puts)
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(charts.convexity_scatter(fit), use_container_width=True)
+    c2.plotly_chart(charts.corr_vs_put_paths(fit), use_container_width=True)
+    down = fit["data"][fit["data"]["spx_ret_pct"] < -3]
+    st.markdown(
+        f"Fit of the monthly swap P&L on the S&P return: **{fit['slope_up']:+.2f} pts per 1%** of index move, plus **{fit['extra_slope_down']:+.2f} pts** "
+        f"more per 1% on the way down (R² {fit['r2']:.2f}). Correlation with a short 15-delta put sold at the VIX: **{fit['corr_with_put']:+.2f}**. "
+        f"In the {len(down)} months where the index fell more than 3%, the swap lost **{down['corr_pnl_pts'].mean():+.1f} pts** on average against "
+        f"**{fit['avg_corr_pnl_all']:+.1f}** overall, and the put lost {down['put_pnl_pct'].mean():+.2f}% against {fit['avg_put_pnl_all']:+.2f}%. "
+        "Selling correlation is selling crash insurance with a different label: price it, size it and hedge it like one."
+    )
     with st.expander("Trade list"):
         st.dataframe((trades * 100).round(1), use_container_width=True)
 
 # ---------- Mechanics ----------
-with tabs[3]:
+with tabs[5]:
     st.markdown(
         "The identity behind the trade, for weights $w_i$, vols $\\sigma_i$ and one average correlation $\\rho$:  \n"
         "$\\sigma_{index}^2 = \\rho\\,(\\sum_i w_i\\sigma_i)^2 + (1-\\rho)\\sum_i w_i^2\\sigma_i^2$  \n"
