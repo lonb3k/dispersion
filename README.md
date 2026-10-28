@@ -18,72 +18,86 @@ On 2026-10-27, solving the basket identity with the 30-day ATM implied vols of t
 S&P 500 names and of SPY gives 10.0% implied correlation; the CBOE COR1M closed at 10.6%.
 Same method as the CBOE (top 50, re-weighted), same answer.
 
-**2. Implied correlation sits above realized almost every month, and the premium collapsed in 2024.**
-Since 2015 the one-month implied correlation (COR1M) averaged well above the realized
-correlation of the basket over the following month. Index options are bought as portfolio
-insurance and single-name options are sold by overwriters, so the spread between index vol
-and its parts carries a premium. From 2024 the premium shrank to a few points and implied
-correlation hit record lows: the trade got crowded.
+**2. The famous correlation premium is mostly survivorship bias.**
+Measure realized correlation on today's top 50 and implied correlation (COR1M) looks about 13
+points too expensive since 2015: a short one-month correlation swap at the COR1M strike earns
++13.0 points a month, 87% of months, Sharpe 3.3. That basket is wrong in the past: today's winners
+(NVDA, TSLA, AVGO, PLTR...) were smaller, more volatile and less correlated names, and the index's
+actual top 50 held XOM, PG, VZ or Citi instead. Rebuilt point in time (each month, the 50 largest
+names by today's float shares times that month's price), the two baskets share 47 names in 2026 and
+realize the same correlation (9.0% vs 9.3%), but only 29 in 2015, and the fixed one shows 0.2%
+realized correlation in 2006 against 26.7%. On the point-in-time basket:
 
-**3. Selling correlation pays steadily and loses in jumps.**
-A short one-month correlation swap at the COR1M strike, rolled monthly, wins most months and
-takes its worst hit in February 2020 (about 40 correlation points). The app reports gross
-figures and says so: no bid-ask, frozen basket, Sharpe as an upper bound.
+| Since 2015 | Today's top 50 | Point-in-time top 50 |
+|---|---|---|
+| Average COR1M / realized next month | 28.9% / 15.9% | 28.6% / 28.4% |
+| Short correlation swap, average P&L | +13.0 pts | +0.4 pts |
+| Hit ratio / Sharpe (gross) | 87% / 3.3 | 57% / 0.1 |
 
-**4. The book, priced: a vega-weighted dispersion trade is flat at the implied correlation and dies in the crash corner.**
-`tradesheet.py` builds the long-singles / short-index variance book from today's 50 chains and
-sweeps realized correlation against how much single names realize relative to their implied.
-At today's trailing vols the book would lose about 4 points: single-name vol is priced for
-earnings that have not printed yet. The trade only pays if the prints move the stocks.
+At the money, implied correlation has been an almost unbiased forecast of next month's realized
+correlation. It carries a premium only in stress (+7.9 points when VIX is above 30) and runs
+below realized in calm markets (−2.8 points under VIX 15).
 
-**5. Implied correlation is at record lows because the index became a few uncorrelated giants.**
-`factors.py`: the Mag 7 are 54% of the basket's weight and 66% of its variance, their pairwise
-correlation (20%) is three times that of the other names (7%), and the share of variance
-explained by the first principal component fell from 40-45% in 2020-2022 to 20% today.
-That share and COR1M move together (correlation +0.60 since 2015). Weak market factor, cheap
-index options, low implied correlation: the premium collapse of 2024-2025 is structural.
-
-**6. Selling correlation is selling an index put.**
-`convexity.py` regresses the monthly correlation-swap P&L on the S&P return of the same month:
-positive slope, steeper on the downside, and the P&L path tracks a short 15-delta put sold at the
-VIX. Since 2015, in the 21 months where the index fell more than 3%, the swap lost about 2 points
-against +12 on average, and the put lost 0.8% of spot against +0.2%. Price it, size it and hedge
-it like crash insurance.
-
-**7. The S&P 500 variance premium is a correlation premium, and since 2024 it has been migrating to single names.**
+**3. The index variance premium is a correlation premium, and it sits in the skew.**
 `decomposition.py` splits what sellers of index variance earn (VIX² against the variance the index
 realizes over the next 21 days) into the part due to correlation and the part due to single-name vol,
 with an exact Shapley split of the basket identity. Implied single-name variances have no free history,
 so they are rebuilt from VIX and COR1M the way CBOE builds COR1M (at the money), then converted to
 variance-swap levels with the index and single-name smiles measured on the 50 live chains
 (SPY at-the-money / model-free vol 0.79, single names model-free / at-the-money 1.13). Plugging COR1M
-straight into VIX, the naive route, overstates single-name implied vol by 12% against the chains
-(46.7 vs 41.6); the corrected rebuild lands at 41.1.
+straight into VIX, the naive route, overstates single-name implied vol by 12% against the chains.
 
-| Variance points (vol², annualized) | 2015-2023 | 2024-2026 |
+| Point-in-time top 50, variance points | 2015-2023 | 2024-2026 |
 |---|---|---|
 | Index premium, VIX² − realized | 70 | 84 |
-| of which correlation | +217 | +93 |
-| of which single-name vol | −147 | −9 |
-| Implied correlation, model-free / COR1M / realized | 45% / 33% / 17% | 22% / 15% / 11% |
+| of which correlation | +80 | +56 |
+| of which single-name vol | −10 | +28 |
 
-Before 2024 the whole index premium came from correlation, positive on 97% of days, while single-name
-variance was not overpriced at all. That is the Driessen, Maenhout and Vilkov (2009) result, rebuilt with
-free data. The model-free implied correlation sits 7 to 12 points above COR1M: index skew is steeper
-than single-name skew, so crash protection on the index is mostly protection against correlation going
-to one. In the worst 5% of months for index variance sellers, the losses are attributed to single-name
-vols exploding (76% to 123% of the loss depending on the specification), not to correlation: the
-correlation part is the steady earner (monthly hit ratio 95%).
+The correlation part is positive in every year since 2007; the single-name part swings around zero,
+which is the Driessen, Maenhout and Vilkov (2009) result rebuilt with free data. Result 2 and this one
+fit together: model-free implied correlation averages 38% since 2015, against 29% for COR1M and 28%
+realized. The premium is not in at-the-money correlation, it is in index skew. Index puts are expensive
+because they price correlation going to one in a crash.
 
-Since 2024 the correlation part has fallen and the single-name part has risen. The levels depend on two
-choices, the calibration of the smiles and the basket (today's top 50 are survivors, which biases the
-pre-2024 numbers; the 31 names already in the top 50 in 2015 remove that bias but miss the names that
-drive index variance after 2024). Across three calibrations and both baskets, the correlation part fell
-by 90 to 155 variance points and the single-name part rose by 105 to 170. The direction is robust, the
-size is not, and the app shows the full table.
+Since 2024 the correlation part has fallen and the single-name part has risen in all nine
+specifications tested (three calibrations of the smiles, three baskets); the size of the shift is not
+robust, the direction is. In the worst 5% of months for index variance sellers, 70% to 100% of the
+loss is attributed to single-name vols exploding.
 
-The two parts are an attribution of a short index variance position, not two separately tradable P&Ls:
-a real dispersion book also pays 50 bid-ask spreads.
+**4. The full dispersion book, backtested: priced, but not harvestable after costs.**
+`dispersion_backtest.py` rolls the vega-weighted variance dispersion book every month since 2015:
+short a one-month index variance swap at the VIX, long one-month variance swaps on the point-in-time
+top 50 with vega w_i x V, real variance-swap payoffs (single names capped at 2.5x strike), half a
+bid-ask paid on every leg at every roll.
+
+| Since 2015, per unit of index vega | Gross | Net (0.5 / 1 vol pt) |
+|---|---|---|
+| Average P&L per month | +1.0 vol pt | −0.4 vol pt |
+| Sharpe | 1.18 | −0.47 |
+
+Across single-name smile assumptions and cost levels, the net Sharpe runs from −2.8 to +0.9. The
+same book on today's top 50 shows a Sharpe of 3.6: survivorship again. On the one day the rebuilt
+single-name strikes can be checked against real chains, they are 2.5 points too low (40.0 vs 42.5),
+which flatters the long legs, so the gross line is an upper bound. Correlation risk is priced and
+hard to harvest after costs, which is the limits-to-arbitrage reading of Driessen et al.
+
+**5. The book, priced today: flat at the implied correlation, dead in the crash corner.**
+`tradesheet.py` builds the long-singles / short-index variance book from today's 50 chains and
+sweeps realized correlation against how much single names realize relative to their implied.
+At today's trailing vols the book would lose about 4 points: single-name vol is priced for
+earnings that have not printed yet.
+
+**6. Implied correlation is at record lows because the index became a few uncorrelated giants.**
+`factors.py`: the Mag 7 are 54% of the basket's weight and 66% of its variance, their pairwise
+correlation (20%) is three times that of the other names (7%), and the share of variance
+explained by the first principal component fell from 40-45% in 2020-2022 to 20% today.
+That share and COR1M move together (correlation +0.60 since 2015).
+
+**7. Selling correlation is selling an index put.**
+`convexity.py` regresses the monthly correlation-swap P&L on the S&P return of the same month:
++2.1 points per 1% of index move, 0.5 more on the way down (R² 0.46), correlation +0.43 with a short
+15-delta put sold at the VIX. In the 21 months since 2015 where the index fell more than 3%, the swap
+lost 17 points on average against +0.4 overall.
 
 ## What the app shows
 
@@ -93,7 +107,7 @@ a real dispersion book also pays 50 bid-ask spreads.
 | **Why so low** | Mag 7 vs the rest: pairwise correlations, share of variance vs share of weight, first principal component share against COR1M |
 | **Today** | Per-name 30/60/90d ATM implied vol vs 21d realized, earnings flags, our implied correlation next to the CBOE print, implied dispersion |
 | **Implied vs realized** | COR1M vs realized correlation over the next 21 days since 2006, premium by year and by VIX regime |
-| **Correlation swap backtest** | Monthly short correlation at the COR1M strike: cumulative P&L, drawdown, hit ratio, worst trades, and the short-put comparison |
+| **Correlation swap backtest** | Monthly short correlation at the COR1M strike: cumulative P&L, drawdown, hit ratio, worst trades, the short-put comparison, and the full vega-weighted variance dispersion book rolled monthly, gross and net, with its sensitivity grid |
 | **Where the premium comes from** | The index variance premium split into correlation and single-name vol by year, model-free vs ATM implied correlation, rebuilt single-name implied vol vs realized, cumulative P&L of the three short positions, robustness across calibrations and baskets |
 | **Mechanics** | Index vol as a function of correlation with today's single-name IVs, realized index vol vs average single vol, COR1M vs COR3M term structure, pairwise correlation heatmap |
 
@@ -122,9 +136,11 @@ rho leg with a correlation swap.
   tenor is why implied correlation is seasonally low in late October and late January.
 - **Names without history drop out and weights renormalize** on each date, so the basket
   does not shrink artificially before an IPO.
-- **Backtest from 2015 by default.** The realized basket is today's top 50 with fixed weights
-  (survivorship). Before 2015 NVDA, TSLA, AVGO or PLTR were small or unlisted, so early realized
-  correlation is understated and the premium overstated. The full series is still shown.
+- **Point-in-time basket for everything historical.** Each month, the 50 largest names among today's
+  250 largest by today's float-adjusted share count (from the SPY holdings file) times that month's
+  split-adjusted, not dividend-adjusted, price. Known gaps: share counts move (Citi's 2008-2009 dilution
+  makes it look too big before, Apple's buybacks too small), and names delisted since (Celgene, EMC...)
+  cannot enter. The sidebar switches back to the fixed basket of today's names to show the bias.
 - **Non-overlapping monthly trades** in the backtest so the hit ratio and Sharpe are not
   inflated by daily overlapping observations.
 
@@ -139,7 +155,7 @@ rho leg with a correlation swap.
 .venv/bin/python -m pytest -q tests
 ```
 
-Twenty-one tests. Among them: the variance premium decomposition is exactly zero when implied equals realized, puts an overpriced correlation in the correlation part, and matches both orderings of the Shapley split; the identity round-trips for any rho; index vol equals the weighted average single
+Twenty-five tests. Among them: point-in-time weights pick the largest caps and apply from the next trading day; the book's legs add up and costs only lower it; variance-swap payoffs are zero at the strike and convex; the variance premium decomposition is exactly zero when implied equals realized, puts an overpriced correlation in the correlation part, and matches both orderings of the Shapley split; the identity round-trips for any rho; index vol equals the weighted average single
 vol at rho = 1; the realized estimator recovers the factor correlation of a simulated one-factor
 market; names listing mid-sample are handled; the backtest P&L equals strike minus realized;
 Black-76 round-trips price to IV and recovers the forward and ATM vol from a synthetic chain.
@@ -155,6 +171,8 @@ replication and a 90-day implied correlation that the CBOE does not publish.
 
 - Prices: Yahoo Finance via `yfinance`, mirrored to `data/prices.csv`.
 - Weights: SPY holdings file from State Street, `data/spy_holdings.xlsx`, top 50 to `data/weights_top50.csv`.
+- Point-in-time universe: closes of today's 250 largest names since 2005, split-adjusted (`data/pit_close.csv.gz`)
+  and total-return (`data/pit_adj.csv.gz`), with float-adjusted shares in `data/pit_shares.csv`.
 - Implied correlation history: CBOE public CSV endpoint for COR1M, COR3M and VIX, since 2006.
 - Option chains: Yahoo, delayed. Outside US hours most quotes fall back to last trades and the app says so.
 
@@ -196,6 +214,7 @@ src/dispersion/
   factors.py                   Mag 7 vs rest correlations, variance shares, first principal component
   convexity.py                 short put simulation, convexity fit of the swap P&L
   decomposition.py             index variance premium = correlation part + single-name part, robustness
+  dispersion_backtest.py       vega-weighted variance dispersion book rolled monthly, strike check, sizing
   charts.py                    Plotly figures
 scripts/snapshot_implied_corr.py
 tests/

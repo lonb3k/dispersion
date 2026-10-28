@@ -33,7 +33,16 @@ def index_vol_from_correlation(rho: float, vols: np.ndarray, weights: np.ndarray
     return float(np.sqrt(rho * (w * s).sum() ** 2 + (1 - rho) * (w**2 * s**2).sum()))
 
 
-def realized_correlation_history(prices: pd.DataFrame, weights: pd.Series, window: int = 21,
+def weights_frame(weights: pd.Series | pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
+    """Daily weights aligned on `prices`: a Series (fixed basket) is broadcast to every date, a DataFrame
+    (point-in-time membership) is aligned and forward-filled."""
+    if isinstance(weights, pd.DataFrame):
+        return weights.reindex(columns=prices.columns).reindex(prices.index).ffill().fillna(0.0)
+    w = weights.reindex(prices.columns).fillna(0.0)
+    return pd.DataFrame(np.tile(w.values, (len(prices), 1)), index=prices.index, columns=prices.columns)
+
+
+def realized_correlation_history(prices: pd.DataFrame, weights: pd.Series | pd.DataFrame, window: int = 21,
                                  index_prices: pd.Series | None = None) -> pd.DataFrame:
     """Rolling realized correlation that reconciles index vol with the top-N single-name vols.
 
@@ -46,12 +55,12 @@ def realized_correlation_history(prices: pd.DataFrame, weights: pd.Series, windo
     Fixed weights (today's), so the basket is a frozen top-N: survivorship is noted in the README.
     Columns: index_vol, basket_vol, avg_single_vol, rho, rho_basket, dispersion (avg_single_vol - index_vol), vol %.
     """
-    w0 = weights.reindex(prices.columns).fillna(0)
+    w0 = weights_frame(weights, prices)
     r = np.log(prices / prices.shift(1))
     var_i = r.rolling(window).var()
     # names without history on a given date (pre-IPO) drop out and weights are renormalized that day
     avail = var_i.notna().astype(float)
-    w = avail.mul(w0, axis=1)
+    w = avail * w0
     w = w.div(w.sum(axis=1), axis=0)
     basket_r = (r.fillna(0) * w).sum(axis=1)
     var_b = basket_r.rolling(window).var()

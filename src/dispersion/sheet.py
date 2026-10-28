@@ -20,7 +20,7 @@ import plotly.io as pio
 
 from . import backtest as bt, charts, convexity as cx, factors as fa, tradesheet as ts
 from .correlation import realized_correlation_history
-from .data import load_cboe_index, load_prices
+from .data import load_cboe_index, load_prices, point_in_time_universe
 from .snapshot import implied_snapshot
 from .universe import load_weights
 
@@ -111,7 +111,9 @@ def build_sheet(offline: bool = False, top_n: int = 50, tenor: int = 30) -> dict
     w = load_weights(top_n)
     tickers = list(w["ticker"]) + ["SPY"]
     px = load_prices(tickers, start="2005-01-01", offline=offline)
-    hist = realized_correlation_history(px[list(w["ticker"])], w.set_index("ticker")["weight"], index_prices=px["SPY"])
+    # realized correlation on an approximate point-in-time top 50: a fixed basket of today's names invents a premium
+    pit_px, pit_w, pit_spy = point_in_time_universe(offline=offline, top_n=top_n)
+    hist = realized_correlation_history(pit_px, pit_w, index_prices=pit_spy)
     cor1m, cor3m, vix = load_cboe_index("COR1M", offline), load_cboe_index("COR3M", offline), load_cboe_index("VIX", offline)
     crp_full = bt.correlation_risk_premium(cor1m, hist)
     crp = crp_full[crp_full.index >= pd.Timestamp(BT_START)]
@@ -279,6 +281,17 @@ def build_sheet(offline: bool = False, top_n: int = 50, tenor: int = 30) -> dict
                       "worst_date": tr_in["pnl"].idxmax().strftime("%b %Y") if len(tr_in) else None, "n": int(len(tr_in)),
                       "sample": f"{len(tr_in)} monthly trades in this bucket since 2006"},
         })
+    # the same book rolled monthly since 2015 on rebuilt strikes and the point-in-time universe
+    book_hist = None
+    try:
+        from . import dispersion_backtest as dbt
+        bk = dbt.backtest(pit_px, pit_w, pit_spy, vix, cor1m, start=BT_START)
+        bk_net = dbt.performance(dbt.to_returns(bk, "pnl_net")[0])
+        bk_gross = dbt.performance(dbt.to_returns(bk, "pnl_gross")[0])
+        book_hist = (f"rolled monthly since 2015 on rebuilt strikes: {bk['pnl_gross'].mean():+.1f} vol pts gross (Sharpe {bk_gross['sharpe']:.2f}), "
+                     f"{bk['pnl_net'].mean():+.1f} after 0.5 / 1 vol pt of costs (Sharpe {bk_net['sharpe']:.2f})")
+    except Exception as exc:
+        warnings_.append(f"book backtest: {type(exc).__name__}: {str(exc)[:120]}")
     # the vega-weighted book read at trailing vols, worst case = crash corner of the grid (a scenario, labelled as such)
     ideas.append({
         "title": "Put on the vega-weighted dispersion book" + (" excluding earnings names" if carry_x and carry_x["total_pts"] > carry["total_pts"] else ""),
@@ -291,7 +304,8 @@ def build_sheet(offline: bool = False, top_n: int = 50, tenor: int = 30) -> dict
         "stats": {"expected": _num((carry_x if carry_x and carry_x["total_pts"] > carry["total_pts"] else carry)["total_pts"], 2),
                   "expected_unit": "vol pts per unit index vega (at trailing vols)", "hit": None,
                   "worst": _num(float(grid.iloc[-1, -1]), 1), "worst_unit": "vol pts, crash scenario (rho 80%, k 1.5)", "worst_date": "scenario",
-                  "n": int(book["legs"]), "sample": "today's chains; the worst case is a scenario, not a historical observation"},
+                  "n": int(book["legs"]), "sample": "today's chains; the worst case is a scenario, not a historical observation",
+                  **({"unconditional": book_hist} if book_hist else {})},
     })
     for i in ideas:
         i["score"] = _num(_score(i["stats"].get("expected"), i["stats"].get("worst")), 3)
@@ -325,7 +339,8 @@ def build_sheet(offline: bool = False, top_n: int = 50, tenor: int = 30) -> dict
                   "Conditioning variable: the quintile of the COR1M strike since 2006. The dispersion book's worst case is the crash corner of the "
                   "scenario grid, labelled as a scenario.",
         "caveats": [
-            "Survivorship: the realized basket is today's top-50 with fixed weights; before 2015 realized correlation is understated.",
+            "Realized correlation uses an approximate point-in-time top 50 (today's float shares times past prices, rebalanced monthly). A fixed "
+            "basket of today's names would understate past correlation and show a premium of about 13 points per month that is not there.",
             "Correlation swap P&L is gross: no bid-ask (several points on a real swap), no margin, frozen basket.",
             "Option quotes from Yahoo are delayed; after the close most chains have no bid-ask and IVs come from last trades.",
         ],

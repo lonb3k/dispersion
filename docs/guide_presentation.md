@@ -8,31 +8,46 @@ l'indice aux vols des composants. Avec des vols implicites on obtient la **corr�
 implicite**, avec des vols réalisées la **corrélation réalisée**. La vol de l'indice est
 bornée par la moyenne pondérée des vols single (ρ = 1) ; l'écart est la dispersion.
 
-### Pourquoi la corrélation implicite est au-dessus de la réalisée
-Les options sur indice sont achetées comme assurance de portefeuille, les options single-name
-sont vendues par les overwriters. L'indice est donc cher relativement à ses composants, ce qui
-se traduit par une corrélation implicite trop haute. C'est le **correlation risk premium** :
-depuis 2015, +12 points en moyenne, positif 84 % des jours.
+### La prime de corrélation, et le piège des survivants
+L'explication classique : les options sur indice sont achetées comme assurance de portefeuille,
+les options single-name sont vendues par les overwriters, donc la corrélation implicite serait trop
+haute. Avec le top 50 d'aujourd'hui comme panier, on trouve en effet +13 points par mois depuis 2015.
+
+**Ce chiffre est faux, et c'est le résultat le plus important du projet.** Les gagnants d'aujourd'hui
+(NVDA, TSLA, AVGO, PLTR) étaient il y a dix ans des titres plus petits, plus volatils et peu corrélés au
+marché. Le vrai top 50 de 2015 contenait XOM, PG, VZ ou Citi. Mesurer la corrélation passée sur les
+survivants la sous-estime, donc fabrique une prime. On reconstruit le panier **point-in-time** : chaque
+mois, les 50 plus grosses capitalisations du moment, estimées avec le nombre d'actions d'aujourd'hui
+(fichier SPY) multiplié par le prix de l'époque.
+
+Preuve que c'est bien le biais : en 2026, les deux paniers ont 47 titres en commun et donnent la même
+corrélation réalisée (9,0 % contre 9,3 %). En 2015 ils n'en partagent que 29. En 2006, le panier figé
+donne 0,2 % de corrélation réalisée, ce qui est absurde, contre 26,7 %.
+
+Sur le panier point-in-time, depuis 2015 : COR1M moyen 28,6 %, corrélation réalisée le mois suivant
+28,4 %. **À la monnaie, la corrélation implicite est une prévision presque sans biais.** Elle contient
+une prime seulement en période de stress (+7,9 points quand le VIX dépasse 30), et elle est même
+en dessous du réalisé quand le marché est calme (−2,8 points sous un VIX de 15).
 
 ### Le trade de dispersion
 Short variance indice, long variances single-name, pondéré en vega. Au premier ordre c'est
 une position short corrélation plus un pari sur les primes de variance single. Le
 **correlation swap** isole la jambe corrélation : vendre au strike COR1M, recevoir la
-corrélation réalisée. Backtest mensuel : gagnant 86 % des mois, pire perte février 2020.
+corrélation réalisée. Backtest mensuel depuis 2015 sur le panier point-in-time : +0,4 point par mois,
+gagnant 57 % des mois, Sharpe brut 0,1. Il ne rapporte rien, pour la raison ci-dessus.
 
 ### Pourquoi la corrélation implicite est à un plus bas historique
 Les Mag 7 pèsent 54 % du panier et 66 % de sa variance, mais leur corrélation entre eux (20 %)
 et avec le reste (5 %) est faible : chacun trade sur sa propre histoire. La part de variance
 expliquée par le premier facteur (PCA) est tombée de 40-45 % en 2020-2022 à 20 %. Cette part
 et COR1M bougent ensemble (+0,60 de corrélation). Facteur marché faible = indice bon marché =
-corrélation implicite basse. L'effondrement du premium en 2024-2025 est structurel, pas un
-hasard.
+corrélation implicite basse.
 
 ### Short corrélation = short put
 La corrélation monte exactement quand l'indice baisse. Régression du P&L mensuel du swap sur
-le rendement S&P : pente positive, plus raide à la baisse. Dans les mois où l'indice perd plus
-de 3 %, le swap perd 2 points contre +12 en moyenne. Vendre de la corrélation, c'est vendre
-de l'assurance contre le krach avec une autre étiquette.
+le rendement S&P : +2,1 points par 1 % de mouvement de l'indice, 0,5 de plus à la baisse. Dans les
+21 mois où l'indice perd plus de 3 %, le swap perd 17 points contre +0,4 en moyenne. Vendre de la
+corrélation, c'est vendre de l'assurance contre le krach avec une autre étiquette.
 
 ### Saisonnalité earnings
 41 des 50 noms publient dans les 30 jours fin octobre : la vol single est gonflée par les
@@ -58,25 +73,48 @@ chère à vendre fin octobre et fin janvier.
 - `factors.py` : corrélations intra Mag 7 / intra reste / croisées, parts de variance, part du
   premier facteur (plus grande valeur propre de la matrice de corrélation / n).
 - `convexity.py` : put 15 delta vendu au VIX, régression P&L = a + b r + c min(r, 0).
+- `universe.py`, `data.py` : univers point-in-time. Chaque fin de mois, top 50 par capitalisation
+  estimée (actions détenues par SPY aujourd'hui × prix de l'époque, ajusté des splits mais pas des
+  dividendes), appliqué à partir du jour de bourse suivant. Si Yahoo refuse les requêtes, retour aux
+  fichiers commités.
+- `decomposition.py` : décomposition de Shapley de la prime de variance (section 4).
+- `dispersion_backtest.py` : le livre vega-weighted en variance swaps, roulé chaque mois. Notionnel
+  de variance = vega / (2 × strike), payoff = notionnel × (RV² − K²), titres plafonnés à 2,5 fois le
+  strike, demi-fourchette payée à chaque roll. Pour passer en rendement, une taille constante qui fait
+  tourner la stratégie à 10 % de vol : le Sharpe n'en dépend pas, le CAGR et le drawdown si.
 
 ## 3. Questions probables
 
-**Survivorship ?** Le panier réalisé est le top 50 d'aujourd'hui. Avant 2015, NVDA, TSLA, PLTR
-n'y étaient pas, donc la corrélation réalisée ancienne est sous-estimée et le premium
-surestimé. Le backtest démarre en 2015 par défaut, et c'est écrit dans l'app.
+**Survivorship ?** C'est le cœur du projet. Avec le top 50 d'aujourd'hui, on trouve une prime de
+corrélation de 13 points par mois et un Sharpe de 3,3. Avec un panier point-in-time, il ne reste rien à
+la monnaie. L'app permet de basculer entre les deux paniers pour montrer le biais.
+
+**Votre panier point-in-time est-il exact ?** Non, c'est une approximation, avec deux limites connues.
+Le nombre d'actions bouge dans le temps : Citi a énormément dilué en 2008-2009, donc il paraît trop gros
+avant, alors qu'Apple a beaucoup racheté et paraît trop petit. Et les titres disparus de la cote, comme
+Celgene ou EMC, n'ont plus de prix sur Yahoo. Mais il reproduit le COR1M presque au point près en moyenne
+(28,6 % contre 28,4 %), et il converge vers le panier actuel en 2026.
 
 **Pourquoi SPY et pas le panier comme jambe indice ?** Parce que le CBOE fait comme ça et parce
 que l'indice complet est plus diversifié que 50 noms : avec le panier, ρ est mécaniquement
 plus haut.
 
-**Pourquoi un correlation swap plutôt qu'un vrai livre de variance swaps ?** Parce que les
-strikes de variance single-name historiques n'existent pas en données gratuites. Le swap isole
-la jambe corrélation proprement ; le trade sheet montre le livre complet sur les données du
-jour.
+**Vous avez backtesté le vrai livre de dispersion ?** Oui, en variance swaps, roulé chaque mois depuis
+2015. Les strikes historiques des titres n'existent pas en données gratuites : on les reconstruit à
+partir du VIX et du COR1M (section 4). Résultat : +1,0 point de vol par mois brut, Sharpe 1,18, et
+−0,4 point net de coûts (0,5 point de fourchette sur l'indice, 1 point par titre), Sharpe −0,47.
+Selon les hypothèses de smile et de coûts, le Sharpe net va de −2,8 à +0,9. Le même livre sur le top 50
+d'aujourd'hui affiche 3,6 : encore les survivants.
 
-**Le Sharpe du swap est-il crédible ?** Non, c'est une borne haute : brut, sans bid-ask (plusieurs
-points sur un vrai swap), panier figé. Ce qui est robuste : le signe du premium, sa saisonnalité
-et sa convexité.
+**Donc la dispersion ne marche pas ?** La prime existe, elle est dans le skew de l'indice. Mais la
+capter demande d'acheter 50 variance swaps de titres chaque mois, et la fourchette mange la prime.
+C'est exactement ce que disent Driessen, Maenhout et Vilkov : le risque de corrélation est pricé, mais
+difficile à capter après coûts. Un desk qui fait de la dispersion gagne sa vie sur l'exécution, le
+choix des titres et le timing, pas sur la prime moyenne.
+
+**Le Sharpe du swap est-il crédible ?** Il est brut, sans fourchette (plusieurs points sur un vrai
+swap). Sur le panier point-in-time il vaut 0,1 : le chiffre honnête n'a pas besoin d'être défendu,
+il dit qu'il n'y a pas de prime à la monnaie.
 
 **Combien vaut votre réplication ?** 10,0 % contre 10,6 % pour COR1M le même jour, avec des
 cotations retardées. La méthode est la même que le CBOE.
@@ -150,45 +188,44 @@ La version corrigée suit la construction du CBOE, en trois temps :
    chaînes (le smile des titres coûte moins cher que celui de l'indice). La corrélation implicite
    model-free se déduit ensuite du VIX².
 
-Résultat du contrôle : 41,1 reconstruit contre 41,6 mesuré. Pour le calibrage, on a répliqué la variance
+Résultat du contrôle : 40,7 reconstruit contre 41,6 mesuré. Pour le calibrage, on a répliqué la variance
 de chaque titre avec la même méthode que le VIX (le strip d'options du vol dashboard). Sur SPY, elle
 redonne 17,5 pour un VIX à 17,7.
 
-### 4.7 Les résultats
+### 4.7 Les résultats (panier point-in-time)
 
 | Points de variance | 2015-2023 | 2024-2026 |
 |---|---|---|
 | Prime de l'indice | 70 | 84 |
-| dont corrélation | +217 | +93 |
-| dont vol individuelle | −147 | −9 |
+| dont corrélation | +80 | +56 |
+| dont vol individuelle | −10 | +28 |
 
 Trois choses à retenir :
 
-- **Avant 2024, toute la prime venait de la corrélation.** La part corrélation est positive 97 % des
-  jours. La vol individuelle, elle, n'était pas surpayée, sa part est même négative. C'est le résultat de
-  Driessen, Maenhout et Vilkov (Journal of Finance, 2009) : la prime de variance de l'indice est une
-  prime de corrélation. On le retrouve avec des données gratuites.
-- **La corrélation model-free est 7 à 12 points au-dessus du COR1M.** Le skew de l'indice est beaucoup
-  plus raide que celui des titres. Quand on achète un put sur l'indice, on se protège surtout contre le
-  scénario où tous les titres baissent ensemble, c'est-à-dire contre la corrélation qui monte vers 1.
-- **Les pertes des pires mois viennent des vols individuelles, pas de la corrélation.** En mars 2020,
-  ce sont les vols des titres qui explosent qui font perdre le vendeur de variance indice. La part
-  corrélation est la source de revenu régulière.
+- **Avant 2024, la prime venait de la corrélation.** La part corrélation est positive chaque année depuis
+  2007, et 81 % des jours. La vol individuelle, elle, n'est pas surpayée de façon fiable : sa part tourne
+  autour de zéro. C'est le résultat de Driessen, Maenhout et Vilkov (Journal of Finance, 2009) : la prime
+  de variance de l'indice est une prime de corrélation. On le retrouve avec des données gratuites.
+- **La prime est dans le skew, pas à la monnaie.** La corrélation implicite model-free vaut 38 % en
+  moyenne depuis 2015, contre 29 % pour le COR1M et 28 % de réalisé. À la monnaie, la corrélation est
+  bien pricée (section 1). Ce qui est cher, ce sont les puts de l'indice : ils protègent contre le scénario
+  où tous les titres baissent ensemble, c'est-à-dire contre la corrélation qui monte vers 1.
+- **Les pertes des pires mois viennent des vols individuelles.** En mars 2020, ce sont les vols des titres
+  qui explosent qui font perdre le vendeur de variance indice (70 à 100 % de la perte selon les variantes).
+  La part corrélation est la source de revenu régulière.
 
 ### 4.8 Ce qui est robuste, et ce qui ne l'est pas
 
 Deux choix pèsent sur les niveaux :
 - **Le calibrage.** c_I et c_S ne sont mesurés que sur les jours où l'on a les chaînes. On les traite
   comme des constantes, et on teste trois couples : 0,75/1,05, 0,80/1,10 et 0,85/1,15.
-- **Le panier.** Le top 50 d'aujourd'hui contient des survivants. NVDA, TSLA et AVGO étaient plus petits
-  et beaucoup plus volatils avant 2024, ce qui gonfle la vol réalisée des titres et pousse
-  artificiellement vers "tout vient de la corrélation". Le panier des 31 titres déjà dans le top 50 en
-  2015 corrige ce biais, mais il en crée un autre après 2024, puisqu'il manque les titres qui font
-  aujourd'hui la variance de l'indice.
+- **Le panier.** Le cas central est le panier point-in-time. Les deux paniers figés servent à mesurer le
+  biais : le top 50 d'aujourd'hui gonfle la part corrélation (217 au lieu de 80 avant 2024), le panier des
+  31 titres de 2015 manque les titres qui font la variance de l'indice après 2024.
 
-Ce qui tient dans les six variantes : la part corrélation est positive avant 2024 ; après 2024 elle
-baisse de 90 à 155 points, et la part vol individuelle monte de 105 à 170 points. Ce qui ne tient pas :
-l'ampleur exacte du déplacement et le signe de la part individuelle. **On annonce un sens, pas un chiffre.**
+Ce qui tient dans les neuf variantes : la part corrélation est positive avant 2024 ; après 2024 elle
+baisse, et la part vol individuelle monte. Ce qui ne tient pas : l'ampleur du déplacement et le signe de
+la part individuelle. **On annonce un sens, pas un chiffre.**
 
 ### 4.9 Questions probables
 
@@ -203,8 +240,8 @@ corrélation bougent ensemble, surtout en crise. Sans Shapley, le partage dépen
 fait varier les deux, ce qui est arbitraire.
 
 **"Comment savez-vous que vos vols implicites reconstruites sont justes ?"** On les a comparées aux vraies
-chaînes du 27 octobre : 41,1 contre 41,6. Et on a montré que la méthode naïve se trompait de 12 %. C'est
-ce contrôle qui nous a fait corriger la méthode.
+chaînes du 27 octobre : 40,7 contre 41,6 en moyenne, et une corrélation de 0,89 titre par titre. La
+méthode naïve se trompait de 12 %. C'est ce contrôle qui nous a fait corriger la méthode.
 
 **"Pourquoi la prime se déplace vers les titres depuis 2024 ?"** Deux pistes compatibles avec les données
 du projet. D'abord, l'indice est devenu quelques géants peu corrélés entre eux : le COR1M est à des plus
@@ -218,8 +255,9 @@ de les mesurer dans le temps.
 
 ## 5. Pitch en trois phrases
 
-"J'ai reconstruit l'indice de corrélation implicite du CBOE depuis 50 chaînes d'options, à
-0,6 point près. J'ai mesuré le premium de corrélation depuis 2006 et montré qu'il s'est effondré
-en 2024 parce que les Mag 7 se sont décorrélés : la part du facteur marché est passée de 45 % à
-20 %. Et j'ai montré que vendre de la corrélation, c'est vendre un put sur l'indice, avec la
-grille de scénarios qu'un desk regarderait avant de mettre le trade."
+"J'ai reconstruit l'indice de corrélation implicite du CBOE depuis 50 chaînes d'options, à 0,6 point
+près. J'ai montré que la célèbre prime de corrélation, 13 points par mois sur le top 50 d'aujourd'hui,
+était un biais de survivants : sur un panier point-in-time, la corrélation à la monnaie est bien pricée,
+et la prime de variance de l'indice se cache dans le skew. Et j'ai backtesté le vrai livre de dispersion
+en variance swaps : la prime existe brute, mais 50 fourchettes de prix par mois la mangent, comme le dit la
+littérature."

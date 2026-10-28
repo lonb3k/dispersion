@@ -276,3 +276,14 @@ def single_iv_vs_rv(dec: pd.DataFrame, smooth: int = 63) -> go.Figure:
     fig.add_trace(go.Scatter(x=d.index, y=d["avg_single_rv_fwd"], name="Realized next 21d", mode="lines",
                              line=dict(width=1.6, color=C["blue"]), hovertemplate="%{y:.1f}%"))
     return fig
+
+
+def book_cumulative(trades: pd.DataFrame) -> go.Figure:
+    fig = _base("Vega-weighted variance dispersion, monthly rolls: cumulative P&L (vol pts per unit index vega)", height=400,
+                yaxis=dict(gridcolor=GRID, zeroline=True, zerolinecolor=MUTED, ticksuffix=""))
+    for i, (c, name) in enumerate([("pnl_gross", "Book, gross"), ("pnl_net", "Book, net of costs"),
+                                   ("index_leg", "Short index leg"), ("single_leg", "Long single-name legs")]):
+        fig.add_trace(go.Scatter(x=trades.index, y=trades[c].cumsum(), name=name, mode="lines",
+                                 line=dict(width=2.2 if i < 2 else 1.3, color=[TEXT, C["red"], C["blue"], C["orange"]][i],
+                                           dash="solid" if i < 2 else "dot"), hovertemplate="%{y:.0f}"))
+    return fig

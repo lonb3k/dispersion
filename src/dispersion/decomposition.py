@@ -34,29 +34,33 @@ ATM correlation with model-free variances, which overstates single-name implied 
 
 Units: annualized variance in vol-points squared (VIX 20 -> 400).
 
-Survivorship: the basket is today's top 50, so realized correlation is understated before ~2015.
-Results default to 2015+.
+Survivorship: a fixed basket of today's top 50 understates realized correlation in the past (today's
+winners were smaller, more volatile and less correlated names) and invents a large correlation
+premium. The default is an approximate point-in-time top 50 (`data.point_in_time_universe`); the
+fixed baskets are kept in `regime_split` to show the size of that bias.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+from .correlation import weights_frame
+
 ANN = 252
 
 
-def basket_moments(prices: pd.DataFrame, weights: pd.Series, index_prices: pd.Series,
+def basket_moments(prices: pd.DataFrame, weights: pd.Series | pd.DataFrame, index_prices: pd.Series,
                    window: int = 21) -> pd.DataFrame:
     """Trailing `window`-day realized A, B, index variance and correlation, annualized, vol-pts squared.
 
     `rho` is unclipped, so `idx_var == B + rho * (A - B)` holds exactly. Names without history on a
     date drop out and weights are renormalized that day (same convention as `realized_correlation_history`).
     """
-    w0 = weights.reindex(prices.columns).fillna(0)
+    w0 = weights_frame(weights, prices)
     r = np.log(prices / prices.shift(1))
     var_i = r.rolling(window).var() * ANN * 1e4
     avail = var_i.notna().astype(float)
-    w = avail.mul(w0, axis=1)
+    w = avail * w0
     w = w.div(w.sum(axis=1), axis=0)
     A = (np.sqrt(var_i) * w).sum(axis=1) ** 2
     B = (var_i * w**2).sum(axis=1)
@@ -91,7 +95,7 @@ def implied_moments(vix: pd.Series, cor: pd.Series, shape: pd.DataFrame,
                          "k": np.sqrt(k2) * c_single_vs})
 
 
-def decompose(prices: pd.DataFrame, weights: pd.Series, index_prices: pd.Series, vix: pd.Series, cor: pd.Series,
+def decompose(prices: pd.DataFrame, weights: pd.Series | pd.DataFrame, index_prices: pd.Series, vix: pd.Series, cor: pd.Series,
               horizon: int = 21, shape_window: int = 63, c_index_atm: float = C_INDEX_ATM,
               c_single_vs: float = C_SINGLE_VS) -> pd.DataFrame:
     """Daily decomposition of the index variance premium, aligned on the trade date t.
@@ -206,19 +210,19 @@ INCUMBENTS_2015 = ["AAPL", "MSFT", "XOM", "JNJ", "GE", "AMZN", "WFC", "BRK-B", "
                    "WMT", "PM", "RTX", "LLY"]
 
 
-def regime_split(prices: pd.DataFrame, weights: pd.Series, index_prices: pd.Series, vix: pd.Series, cor: pd.Series,
-                 baskets: dict[str, list[str]], grid=((0.75, 1.05), (0.80, 1.10), (0.85, 1.15)),
+def regime_split(index_prices: pd.Series, vix: pd.Series, cor: pd.Series,
+                 baskets: dict[str, tuple[pd.DataFrame, pd.Series | pd.DataFrame]],
+                 grid=((0.75, 1.05), (0.80, 1.10), (0.85, 1.15)),
                  cut: str = "2024-01-01", start: str = "2015-01-01") -> pd.DataFrame:
     """Average correlation and single-name parts before and after `cut`, for each basket and calibration.
 
-    The question it answers: is the move from correlation to single-name premium after 2024 an artefact
-    of one basket or one calibration? Each row is one (basket, c_I, c_S) choice.
+    `baskets` maps a name to (prices, weights); weights are a Series for a fixed basket or a DataFrame
+    for point-in-time membership. Each row is one (basket, c_I, c_S) choice.
     """
     rows = []
-    for bname, names in baskets.items():
-        names = [t for t in names if t in prices.columns and t in weights.index]
+    for bname, (prices, weights) in baskets.items():
         for ci, cs in grid:
-            dec = decompose(prices[names], weights[names], index_prices, vix, cor, c_index_atm=ci, c_single_vs=cs)
+            dec = decompose(prices, weights, index_prices, vix, cor, c_index_atm=ci, c_single_vs=cs)
             pre = dec[(dec.index >= pd.Timestamp(start)) & (dec.index < pd.Timestamp(cut))]
             post = dec[dec.index >= pd.Timestamp(cut)]
             tail = leg_stats(monthly_legs(pre, start=None)).loc["Short single-name variance", "share_of_tail_losses_%"]

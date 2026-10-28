@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from dispersion import backtest as bt, charts, convexity as cx, decomposition as dcmp, factors as fa, tradesheet as ts  # noqa: E402
 from dispersion.correlation import pairwise_correlation_matrix, realized_correlation_history  # noqa: E402
-from dispersion.data import load_cboe_index, load_prices  # noqa: E402
+from dispersion.data import load_cboe_index, load_prices, point_in_time_universe  # noqa: E402
+from dispersion import dispersion_backtest as dbt  # noqa: E402
 from dispersion.snapshot import implied_snapshot  # noqa: E402
 from dispersion.universe import DATA_DIR, load_weights  # noqa: E402
 
@@ -59,17 +60,42 @@ def factor_views(tickers: tuple[str, ...], start: str, offline: bool):
     return (fa.group_correlations(sub), fa.variance_shares(sub, w.set_index("ticker")["weight"]), fa.first_factor_share(sub))
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner="Rebuilding the point-in-time top 50...")
+def pit_universe(offline: bool):
+    return point_in_time_universe(offline=offline)
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner="Decomposing 20 years of variance premium...")
 def premium_decomposition(offline: bool):
-    """Always on the full top 50 (the incumbents check needs all names), independent of the sidebar slider."""
+    """Point-in-time top 50 as the main case; today's top 50 and the 2015 incumbents as fixed baskets, to show survivorship."""
+    P, W, spy = point_in_time_universe(offline=offline)
     w50 = load_weights(50).set_index("ticker")["weight"]
-    px50 = load_prices(list(w50.index) + ["SPY"], start="2005-01-01", offline=offline)
-    names = [t for t in w50.index if t in px50]
+    names = [t for t in w50.index if t in P]
+    inc = [t for t in dcmp.INCUMBENTS_2015 if t in P]
     v, c = load_cboe_index("VIX", offline=offline), load_cboe_index("COR1M", offline=offline)
-    dec = dcmp.decompose(px50[names], w50[names], px50["SPY"], v, c)
-    rob = dcmp.regime_split(px50, w50, px50["SPY"], v, c,
-                            {"Top 50 today": names, "31 incumbents of 2015": dcmp.INCUMBENTS_2015})
+    dec = dcmp.decompose(P, W, spy, v, c)
+    rob = dcmp.regime_split(spy, v, c, {"Point-in-time top 50": (P, W), "Today's top 50 (survivors)": (P[names], w50[names]),
+                                        "31 incumbents of 2015": (P[inc], w50[inc])})
     return dec, rob
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Rolling the dispersion book since 2015...")
+def dispersion_book(offline: bool):
+    P, W, spy = point_in_time_universe(offline=offline)
+    v, c = load_cboe_index("VIX", offline=offline), load_cboe_index("COR1M", offline=offline)
+    base = dbt.backtest(P, W, spy, v, c)
+    rows = []
+    for cs in (1.05, 1.10, 1.15):
+        for ic_, sc in [(0.0, 0.0), (0.5, 1.0), (0.5, 2.0)]:
+            t = dbt.backtest(P, W, spy, v, c, index_cost=ic_, single_cost=sc, c_single_vs=cs)
+            p = dbt.performance(dbt.to_returns(t, "pnl_net")[0])
+            rows.append({"c_S (single smile)": cs, "costs, index / single (vol pts)": f"{ic_} / {sc}",
+                         "avg P&L (vol pts)": t["pnl_net"].mean(), "Sharpe": p["sharpe"], "hit %": p["hit_%"],
+                         "worst month at 10% vol, %": p["worst_month_%"], "max drawdown at 10% vol, %": p["max_dd_%"]})
+    w50 = load_weights(50).set_index("ticker")["weight"]
+    names = [t for t in w50.index if t in P]
+    survivors = dbt.backtest(P[names], w50[names], spy, v, c)
+    return base, pd.DataFrame(rows), survivors
 
 
 def fmt(x, suffix="%", d=1):
@@ -86,6 +112,9 @@ with st.sidebar:
         st.caption("Hosted demo: opens on the CSV snapshot committed to the repo (implied vols from the last daily run). "
                    "Switch offline off for live data.")
     bt_start = st.date_input("Backtest from", pd.Timestamp("2015-01-01"))
+    basket_mode = st.radio("Basket for realized correlation", ["Point-in-time top 50", "Today's top 50 (survivorship bias)"], 0,
+                           help="Point in time: the 50 largest names of each month, rebuilt from today's float shares and past prices. "
+                                "Today's top 50: the naive fixed basket, kept to show how much survivorship inflates the premium.")
     st.divider()
     st.caption("Prices: Yahoo Finance. Weights: SPY holdings (State Street). Implied correlation history: CBOE COR1M / COR3M. "
                "Single-name implied vols rebuilt from option mids with Black-76 on the put-call-parity forward.")
@@ -93,7 +122,11 @@ with st.sidebar:
 w = weights(top_n)
 tickers = tuple(w["ticker"]) + ("SPY",)
 px = prices(tickers, "2005-01-01", offline)
-hist = realized_correlation_history(px[list(w["ticker"])], w.set_index("ticker")["weight"], index_prices=px["SPY"])
+if basket_mode.startswith("Point"):
+    _P, _W, _spy = pit_universe(offline)
+    hist = realized_correlation_history(_P, _W, index_prices=_spy)
+else:
+    hist = realized_correlation_history(px[list(w["ticker"])], w.set_index("ticker")["weight"], index_prices=px["SPY"])
 cor1m, cor3m, vix = cboe("COR1M", offline), cboe("COR3M", offline), cboe("VIX", offline)
 crp_full = bt.correlation_risk_premium(cor1m, hist)
 
@@ -216,15 +249,25 @@ with tabs[3]:
     with c2:
         st.markdown("**By VIX regime**")
         st.dataframe(bt.premium_by_vix_regime(crp, vix).round(1), use_container_width=True)
-        st.markdown(
-            "Implied correlation sits above realized almost all the time: index options are bid as portfolio insurance, "
-            "single-name options are sold by overwriters, so the index-vs-singles spread prices a premium. "
-            "The premium shrank sharply from 2024: the trade became crowded and implied correlation hit record lows."
-        )
-    st.warning(
-        "Survivorship caveat: the realized basket is **today's** top names with fixed weights. Before 2015 several of them "
-        "(NVDA, TSLA, AVGO, PLTR...) were small or not listed, so early realized correlation is understated and the premium "
-        "overstated. The backtest start date in the sidebar defaults to 2015 for that reason. The CBOE rebalances its basket."
+        if basket_mode.startswith("Point"):
+            st.markdown(
+                "On a point-in-time basket, at-the-money implied correlation has been an almost unbiased forecast of next month's "
+                "realized correlation since 2015: the premium averages a fraction of a point and is positive on about half the days. "
+                "It only appears in stress (VIX above 30). The index variance premium is real, but it does not sit in at-the-money "
+                "correlation: see *Where the premium comes from*."
+            )
+        else:
+            st.markdown(
+                "This is the survivorship trap. Today's top 50 include names that were small, volatile and loosely correlated ten "
+                "years ago (NVDA, TSLA, AVGO, PLTR...), so their past realized correlation is far below that of the index's actual "
+                "top 50, and implied correlation looks 10 to 15 points too expensive. Switch the sidebar back to point in time."
+            )
+    st.info(
+        "**Point-in-time basket.** Each month, the 50 largest names among today's 250 largest, by today's float-adjusted share "
+        "count times that month's split-adjusted price, as CBOE does for COR1M. Known gaps: share counts move (heavy "
+        "issuers such as Citi in 2008-2009 look too big in the past, heavy buyers such as Apple too small), and names delisted "
+        "since (Celgene, EMC...) cannot enter. In 2026 the two baskets share 47 names and realize the same correlation; in 2015 "
+        "they share 29 and differ by 20 points."
     )
 
 # ---------- Backtest ----------
@@ -247,7 +290,7 @@ with tabs[4]:
         "(short index variance, long single-name variances, vega-weighted) is this position plus a bet on single-name vol premia, "
         "so this isolates the correlation leg.\n\n"
         "**What it is not.** No bid-ask (several correlation points on a real swap), no margin, no vega-notional sizing by regime, "
-        "and the basket is frozen (see the survivorship caveat). The Sharpe is an upper bound, and the losses in "
+        "and the basket membership is approximate (see the point-in-time note in the previous tab). The Sharpe is an upper bound, and the losses in "
         f"{stats['worst_trade_date'].strftime('%B %Y')} are what a real book would feel first."
     )
     st.markdown("#### Short correlation is a short put on the index")
@@ -266,6 +309,34 @@ with tabs[4]:
     )
     with st.expander("Trade list"):
         st.dataframe((trades * 100).round(1), use_container_width=True)
+
+    st.markdown("#### The full book: vega-weighted variance dispersion, rolled monthly")
+    book, book_grid, book_surv = dispersion_book(offline)
+    bk_net, _ = dbt.to_returns(book, "pnl_net")
+    pn, pg = dbt.performance(bk_net), dbt.performance(dbt.to_returns(book, "pnl_gross")[0])
+    ps = dbt.performance(dbt.to_returns(book_surv, "pnl_net")[0])
+    c = st.columns(4)
+    c[0].metric("Gross P&L / month", f"{book['pnl_gross'].mean():+.1f} vol pts", f"Sharpe {pg['sharpe']:.2f}", delta_color="off")
+    c[1].metric("Net of costs", f"{book['pnl_net'].mean():+.1f} vol pts", f"Sharpe {pn['sharpe']:.2f}", delta_color="off")
+    c[2].metric("Costs / month", f"{book['costs'].mean():.1f} vol pts", "0.5 index, 1.0 single names", delta_color="off")
+    c[3].metric("Same book on today's top 50", f"Sharpe {ps['sharpe']:.2f}", "survivorship bias", delta_color="off")
+    st.plotly_chart(charts.book_cumulative(book), use_container_width=True)
+    st.dataframe(book_grid.style.format({"avg P&L (vol pts)": "{:+.2f}", "Sharpe": "{:.2f}", "hit %": "{:.0f}",
+                                         "worst month at 10% vol, %": "{:.1f}", "max drawdown at 10% vol, %": "{:.1f}"}),
+                 use_container_width=True, hide_index=True)
+    st.markdown(
+        "**What this is.** The book of the *Trade sheet* tab, rolled every 21 trading days since 2015: short a one-month index "
+        "variance swap at the VIX, long one-month variance swaps on the point-in-time top 50 with vega notional w_i x V. Real "
+        "variance-swap payoffs (convex, single names capped at 2.5x strike), half a bid-ask paid on every leg at every roll. "
+        "Single-name strikes have no free history: they are rebuilt from VIX and COR1M (see *Where the premium comes from*), "
+        "checked against the 27 Oct 2026 chains: correlation 0.89 across names, but the weighted level is 2.5 points too low "
+        "(40.0 vs 42.5), which flatters the long legs. Treat the gross line as an upper bound.\n\n"
+        "**Reading.** Gross, the book earns what the decomposition says it should: the correlation premium. Net, a vol point of "
+        "bid-ask on 50 single-name swaps every month eats most or all of it, and the result swings with the single-name smile "
+        "assumption (c_S), which no free data pins down. The same book on today's top 50 looks like a money machine: that is "
+        "survivorship, not alpha. This matches the academic reading (Driessen, Maenhout and Vilkov, 2009): correlation risk is "
+        "priced, and hard to harvest after costs. Returns at 10% vol use one constant sizing for the whole sample."
+    )
 
 # ---------- Where the premium comes from ----------
 with tabs[5]:
@@ -287,8 +358,8 @@ with tabs[5]:
                 f"premium {post['avg_total']:.0f}", delta_color="off")
     st.plotly_chart(charts.premium_split_by_year(dcmp.by_period(dec, start=str(pd.Timestamp(bt_start).year))), use_container_width=True)
     st.markdown(
-        "**Reading.** The correlation part is positive in almost every year: the market charges for correlation, reliably. "
-        "The single-name part swings around zero and is negative in most years: single-name variance is not reliably overpriced. "
+        "**Reading.** The correlation part is positive in every year since 2007: the market charges for correlation, reliably. "
+        "The single-name part swings around zero, positive in some years and negative in others: single-name variance is not reliably overpriced. "
         "This is the Driessen, Maenhout and Vilkov (2009) result, *the index variance premium is a correlation premium*, "
         "rebuilt here from free data. Since 2024 the correlation part has shrunk and the single-name part has grown: with COR1M "
         "at record lows, part of what index variance sellers earn now comes from single-name vol (AI megacaps, earnings)."
@@ -312,9 +383,9 @@ with tabs[5]:
     st.markdown(
         "Two choices drive the levels. **Calibration**: c_I is SPY at-the-money vol over SPY model-free vol (0.79 measured), "
         "c_S is single-name model-free over at-the-money vol (1.13 measured, 1.06 for the median name); both are treated as "
-        "constants. **Basket**: today's top 50 are survivors whose high pre-megacap vol (NVDA, TSLA, AVGO...) inflates "
-        "realized single-name vol before 2024; the 31 names already in the top 50 in 2015 remove that bias but miss the names "
-        "driving index variance after 2024."
+        "constants. **Basket**: the main case is the point-in-time top 50. The two fixed baskets are there to show what "
+        "survivorship does: today's top 50 (high pre-megacap vol of NVDA, TSLA, AVGO... inflates the correlation part) and the "
+        "31 names already in the top 50 in 2015 (no survivors added, but the names driving index variance after 2024 are missing)."
     )
     st.dataframe(rob.style.format({c: "{:.0f}" for c in rob.columns if c not in ("basket", "c_I", "c_S")} | {"c_I": "{:.2f}", "c_S": "{:.2f}"}),
                  use_container_width=True, hide_index=True)
@@ -330,7 +401,7 @@ with tabs[5]:
             "scaled by $c_S$ to variance swaps; model-free $\\rho_Q$ solved from VIX².  \n"
             "3. Realized side: the same quantities over $t+1 \\dots t+21$, index leg = SPY.  \n"
             "4. Shapley split: correlation part $= (\\rho_Q-\\rho_P)\\cdot\\tfrac12[(A_Q-B_Q)+(A_P-B_P)]$, single-name part = the rest. "
-            "Validation on 27 Oct 2026: rebuilt average single-name variance-swap vol 41.1 against 41.6 replicated from the 49 chains; "
+            "Validation on 27 Oct 2026: rebuilt average single-name variance-swap vol 40.7 against 41.6 replicated from the 49 chains; "
             "the naive version (COR1M plugged straight into VIX) gives 46.7."
         )
 
