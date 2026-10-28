@@ -33,6 +33,10 @@ def implied_snapshot(weights: pd.DataFrame, target_days: int = 30, offline: bool
     A same-day snapshot file is reused unless `force=True` (chains take about two minutes to read)."""
     today = date.today().isoformat()
     path = DATA_DIR / f"implied_snapshot_{today}_{target_days}d.csv"
+    if offline and not path.exists():  # fall back on the latest committed snapshot for this tenor
+        older = sorted(DATA_DIR.glob(f"implied_snapshot_*_{target_days}d.csv"))
+        if older:
+            path, today = older[-1], older[-1].stem.split("_")[2]
     if path.exists() and not force:
         table = pd.read_csv(path)
     else:

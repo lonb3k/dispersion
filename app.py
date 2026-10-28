@@ -4,6 +4,7 @@ Run:  streamlit run app.py
 """
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -19,9 +20,14 @@ from dispersion import backtest as bt, charts, convexity as cx, factors as fa, t
 from dispersion.correlation import pairwise_correlation_matrix, realized_correlation_history  # noqa: E402
 from dispersion.data import load_cboe_index, load_prices  # noqa: E402
 from dispersion.snapshot import implied_snapshot  # noqa: E402
-from dispersion.universe import load_weights  # noqa: E402
+from dispersion.universe import DATA_DIR, load_weights  # noqa: E402
 
 st.set_page_config(page_title="Dispersion", page_icon="🔀", layout="wide")
+
+# Shared hosts get rate-limited by Yahoo, so there the app opens on the CSV mirrors committed to the repo.
+# Streamlit Community Cloud mounts the repo under /mount/src, Hugging Face Spaces sets SPACE_ID.
+HOSTED = (str(Path(__file__).resolve()).startswith("/mount/src/") or "SPACE_ID" in os.environ
+          or os.environ.get("OFFLINE_DEFAULT") == "1")
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -61,7 +67,11 @@ with st.sidebar:
     st.title("Dispersion")
     st.caption("Implied vs realized correlation on the S&P 500 top-50, the CBOE COR1M way.")
     top_n = st.slider("Basket size (largest by weight)", 20, 50, 50, step=5)
-    offline = st.toggle("Offline (cached data only)", value=False)
+    offline = st.toggle("Offline (cached data only)", value=HOSTED,
+                        help="Off: live Yahoo prices and option chains (about two minutes for 51 chains). On: the CSV extracts in data/.")
+    if HOSTED and offline:
+        st.caption("Hosted demo: opens on the CSV snapshot committed to the repo (implied vols from the last daily run). "
+                   "Switch offline off for live data.")
     bt_start = st.date_input("Backtest from", pd.Timestamp("2015-01-01"))
     st.divider()
     st.caption("Prices: Yahoo Finance. Weights: SPY holdings (State Street). Implied correlation history: CBOE COR1M / COR3M. "
@@ -82,9 +92,14 @@ tabs = st.tabs(["Today", "Trade sheet", "Why so low", "Implied vs realized", "Co
 
 # ---------- Today ----------
 with tabs[0]:
-    target = st.select_slider("Option tenor (days)", [30, 60, 90], value=30)
+    tenors = [30, 60, 90]
+    if offline:  # only the tenors with a committed snapshot
+        tenors = [d for d in tenors if any(DATA_DIR.glob(f"implied_snapshot_*_{d}d.csv"))] or tenors
+    target = st.select_slider("Option tenor (days)", tenors, value=30) if len(tenors) > 1 else tenors[0]
     with st.spinner("Reading option chains name by name (about two minutes the first time)..."):
         names, summ = snapshot(top_n, target, offline)
+    if offline:
+        st.caption(f"Option chains read on {summ['date']} (latest committed snapshot).")
     last_cor = float(cor1m.iloc[-1])
     c = st.columns(5)
     c[0].metric("Implied correlation (ours)", fmt(summ["rho_implied"] * 100))
