@@ -16,6 +16,8 @@ from .data import load_prices, next_earnings, option_chain
 from .options import clean_chain, skew_metrics
 from .universe import DATA_DIR
 
+MIN_QUOTED = 30  # below this many quoted chains a fresh snapshot is not trusted
+
 
 def atm_iv(ticker: str, target_days: int) -> dict:
     raw, expiry, spot = option_chain(ticker, target_days)
@@ -52,7 +54,18 @@ def implied_snapshot(weights: pd.DataFrame, target_days: int = 30, offline: bool
             if progress:
                 progress((i + 1) / len(tickers), t)
         table = pd.DataFrame(rows)
-        table.to_csv(path, index=False)
+        quoted = int(table["atm_iv"].notna().sum())
+        spy_ok = bool(table.loc[table["ticker"] == "SPY", "atm_iv"].notna().any())
+        if quoted >= MIN_QUOTED and spy_ok:
+            table.to_csv(path, index=False)
+        else:
+            # Yahoo returned almost nothing (rate limit on shared runners, or chains read off-hours):
+            # keep the last good snapshot instead of saving and using an empty one
+            older = sorted(p for p in DATA_DIR.glob(f"implied_snapshot_*_{target_days}d.csv") if p != path)
+            if not older:
+                raise RuntimeError(f"only {quoted} chains quoted and no earlier snapshot to fall back on")
+            path, today = older[-1], older[-1].stem.split("_")[2]
+            table = pd.read_csv(path)
     if "earnings" in table:
         table["earnings"] = pd.to_datetime(table["earnings"], errors="coerce")
 

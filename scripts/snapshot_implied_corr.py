@@ -30,10 +30,16 @@ def main() -> None:
         names, summ = implied_snapshot(w, tenor)
         summ["cboe_cor1m_last"] = float(cor.iloc[-1]) if not cor.empty else None
         summ["earnings_in_tenor"] = int(names["earnings"].notna().sum())
-        summ["stale_share"] = float(names["stale"].fillna(False).mean())
+        summ["stale_share"] = float(names["stale"].fillna(False).mean()) if "stale" in names else None
+        if summ["date"] != pd.Timestamp.today().strftime("%Y-%m-%d"):
+            print(f"{tenor:3d}d  chains unavailable today, kept the {summ['date']} snapshot; no history row added")
+            continue
         rows.append(summ)
         print(f"{tenor:3d}d  rho_implied={summ['rho_implied']*100:.2f}  index_iv={summ['index_iv']:.1f}  "
               f"avg_single={summ['avg_single_iv']:.1f}  names={summ['names_quoted']}")
+    if not rows:
+        print("no fresh snapshot today; history unchanged")
+        return
     new = pd.DataFrame(rows)
     if HISTORY.exists():
         hist = pd.read_csv(HISTORY)

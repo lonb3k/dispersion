@@ -51,3 +51,20 @@ def test_sizing_hits_the_target_vol():
     t = pd.DataFrame({"pnl_net": np.random.default_rng(1).normal(1.0, 4.0, 120)})
     r, size = db.to_returns(t, "pnl_net", target_vol=0.10)
     assert abs(r.std() * np.sqrt(12) - 0.10) < 1e-9 and size > 0
+
+
+def test_snapshot_falls_back_when_chains_are_missing(tmp_path, monkeypatch):
+    from dispersion import snapshot as sn
+    old = tmp_path / "implied_snapshot_2026-10-27_30d.csv"
+    pd.DataFrame({"ticker": ["A", "B", "SPY"], "atm_iv": [30.0, 40.0, 15.0], "stale": [False, False, False],
+                  "earnings": [None, None, None]}).to_csv(old, index=False)
+    monkeypatch.setattr(sn, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sn, "atm_iv", lambda t, d: {"ticker": t, "atm_iv": np.nan})      # Yahoo returns nothing
+    monkeypatch.setattr(sn, "next_earnings", lambda t: None)
+    idx = pd.bdate_range("2026-09-01", periods=40)
+    monkeypatch.setattr(sn, "load_prices", lambda *a, **k: pd.DataFrame(
+        {t: 100 * np.exp(np.cumsum(np.random.default_rng(0).normal(0, 0.01, 40))) for t in ["A", "B", "SPY"]}, index=idx))
+    w = pd.DataFrame({"ticker": ["A", "B"], "name": ["a", "b"], "sector": ["x", "y"], "weight": [0.5, 0.5]})
+    names, summ = sn.implied_snapshot(w, 30, force=True)
+    assert summ["date"] == "2026-10-27" and summ["names_quoted"] == 2
+    assert len(list(tmp_path.glob("implied_snapshot_*"))) == 1                          # the empty read was not saved
