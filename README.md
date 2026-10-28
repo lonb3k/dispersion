@@ -11,7 +11,7 @@ correlation leg of a dispersion trade. Free data only, so anyone can rerun it.
 Companion to the [volatility dashboard](../vol_dashboard): same option-pricing code
 (Black-76 on the put-call-parity forward), applied to 50 single names at once.
 
-## Three results worth defending
+## Results worth defending
 
 **1. Implied correlation rebuilt from 50 option chains lands within 0.6 point of the CBOE print.**
 On 2026-10-27, solving the basket identity with the 30-day ATM implied vols of the 50 largest
@@ -50,6 +50,41 @@ VIX. Since 2015, in the 21 months where the index fell more than 3%, the swap lo
 against +12 on average, and the put lost 0.8% of spot against +0.2%. Price it, size it and hedge
 it like crash insurance.
 
+**7. The S&P 500 variance premium is a correlation premium, and since 2024 it has been migrating to single names.**
+`decomposition.py` splits what sellers of index variance earn (VIX² against the variance the index
+realizes over the next 21 days) into the part due to correlation and the part due to single-name vol,
+with an exact Shapley split of the basket identity. Implied single-name variances have no free history,
+so they are rebuilt from VIX and COR1M the way CBOE builds COR1M (at the money), then converted to
+variance-swap levels with the index and single-name smiles measured on the 50 live chains
+(SPY at-the-money / model-free vol 0.79, single names model-free / at-the-money 1.13). Plugging COR1M
+straight into VIX, the naive route, overstates single-name implied vol by 12% against the chains
+(46.7 vs 41.6); the corrected rebuild lands at 41.1.
+
+| Variance points (vol², annualized) | 2015-2023 | 2024-2026 |
+|---|---|---|
+| Index premium, VIX² − realized | 70 | 84 |
+| of which correlation | +217 | +93 |
+| of which single-name vol | −147 | −9 |
+| Implied correlation, model-free / COR1M / realized | 45% / 33% / 17% | 22% / 15% / 11% |
+
+Before 2024 the whole index premium came from correlation, positive on 97% of days, while single-name
+variance was not overpriced at all. That is the Driessen, Maenhout and Vilkov (2009) result, rebuilt with
+free data. The model-free implied correlation sits 7 to 12 points above COR1M: index skew is steeper
+than single-name skew, so crash protection on the index is mostly protection against correlation going
+to one. In the worst 5% of months for index variance sellers, the losses are attributed to single-name
+vols exploding (76% to 123% of the loss depending on the specification), not to correlation: the
+correlation part is the steady earner (monthly hit ratio 95%).
+
+Since 2024 the correlation part has fallen and the single-name part has risen. The levels depend on two
+choices, the calibration of the smiles and the basket (today's top 50 are survivors, which biases the
+pre-2024 numbers; the 31 names already in the top 50 in 2015 remove that bias but miss the names that
+drive index variance after 2024). Across three calibrations and both baskets, the correlation part fell
+by 90 to 155 variance points and the single-name part rose by 105 to 170. The direction is robust, the
+size is not, and the app shows the full table.
+
+The two parts are an attribution of a short index variance position, not two separately tradable P&Ls:
+a real dispersion book also pays 50 bid-ask spreads.
+
 ## What the app shows
 
 | Tab | Content |
@@ -59,6 +94,7 @@ it like crash insurance.
 | **Today** | Per-name 30/60/90d ATM implied vol vs 21d realized, earnings flags, our implied correlation next to the CBOE print, implied dispersion |
 | **Implied vs realized** | COR1M vs realized correlation over the next 21 days since 2006, premium by year and by VIX regime |
 | **Correlation swap backtest** | Monthly short correlation at the COR1M strike: cumulative P&L, drawdown, hit ratio, worst trades, and the short-put comparison |
+| **Where the premium comes from** | The index variance premium split into correlation and single-name vol by year, model-free vs ATM implied correlation, rebuilt single-name implied vol vs realized, cumulative P&L of the three short positions, robustness across calibrations and baskets |
 | **Mechanics** | Index vol as a function of correlation with today's single-name IVs, realized index vol vs average single vol, COR1M vs COR3M term structure, pairwise correlation heatmap |
 
 ## The identity
@@ -103,7 +139,7 @@ rho leg with a correlation swap.
 .venv/bin/python -m pytest -q tests
 ```
 
-Thirteen tests. Among them: the identity round-trips for any rho; index vol equals the weighted average single
+Twenty-one tests. Among them: the variance premium decomposition is exactly zero when implied equals realized, puts an overpriced correlation in the correlation part, and matches both orderings of the Shapley split; the identity round-trips for any rho; index vol equals the weighted average single
 vol at rho = 1; the realized estimator recovers the factor correlation of a simulated one-factor
 market; names listing mid-sample are handled; the backtest P&L equals strike minus realized;
 Black-76 round-trips price to IV and recovers the forward and ATM vol from a synthetic chain.
@@ -159,6 +195,7 @@ src/dispersion/
   tradesheet.py                vega-weighted book, scenario grid, breakeven correlation
   factors.py                   Mag 7 vs rest correlations, variance shares, first principal component
   convexity.py                 short put simulation, convexity fit of the swap P&L
+  decomposition.py             index variance premium = correlation part + single-name part, robustness
   charts.py                    Plotly figures
 scripts/snapshot_implied_corr.py
 tests/

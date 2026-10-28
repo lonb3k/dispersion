@@ -16,7 +16,7 @@ import streamlit as st
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from dispersion import backtest as bt, charts, convexity as cx, factors as fa, tradesheet as ts  # noqa: E402
+from dispersion import backtest as bt, charts, convexity as cx, decomposition as dcmp, factors as fa, tradesheet as ts  # noqa: E402
 from dispersion.correlation import pairwise_correlation_matrix, realized_correlation_history  # noqa: E402
 from dispersion.data import load_cboe_index, load_prices  # noqa: E402
 from dispersion.snapshot import implied_snapshot  # noqa: E402
@@ -59,6 +59,19 @@ def factor_views(tickers: tuple[str, ...], start: str, offline: bool):
     return (fa.group_correlations(sub), fa.variance_shares(sub, w.set_index("ticker")["weight"]), fa.first_factor_share(sub))
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner="Decomposing 20 years of variance premium...")
+def premium_decomposition(offline: bool):
+    """Always on the full top 50 (the incumbents check needs all names), independent of the sidebar slider."""
+    w50 = load_weights(50).set_index("ticker")["weight"]
+    px50 = load_prices(list(w50.index) + ["SPY"], start="2005-01-01", offline=offline)
+    names = [t for t in w50.index if t in px50]
+    v, c = load_cboe_index("VIX", offline=offline), load_cboe_index("COR1M", offline=offline)
+    dec = dcmp.decompose(px50[names], w50[names], px50["SPY"], v, c)
+    rob = dcmp.regime_split(px50, w50, px50["SPY"], v, c,
+                            {"Top 50 today": names, "31 incumbents of 2015": dcmp.INCUMBENTS_2015})
+    return dec, rob
+
+
 def fmt(x, suffix="%", d=1):
     return "n/a" if x is None or pd.isna(x) else f"{x:.{d}f}{suffix}"
 
@@ -88,7 +101,8 @@ st.title("Equity dispersion: is correlation too expensive?")
 st.caption(f"Basket: top {top_n} S&P 500 names covering {w['index_weight'].sum()*100:.0f}% of the index, re-weighted to 100%. "
            f"Last price {px.index[-1].date()}, last COR1M {cor1m.index[-1].date()}.")
 
-tabs = st.tabs(["Today", "Trade sheet", "Why so low", "Implied vs realized", "Correlation swap backtest", "Mechanics"])
+tabs = st.tabs(["Today", "Trade sheet", "Why so low", "Implied vs realized", "Correlation swap backtest",
+                "Where the premium comes from", "Mechanics"])
 
 # ---------- Today ----------
 with tabs[0]:
@@ -253,8 +267,75 @@ with tabs[4]:
     with st.expander("Trade list"):
         st.dataframe((trades * 100).round(1), use_container_width=True)
 
-# ---------- Mechanics ----------
+# ---------- Where the premium comes from ----------
 with tabs[5]:
+    dec, rob = premium_decomposition(offline)
+    pre = dcmp.summary(dec[dec.index < "2024-01-01"], "2015-01-01")
+    post = dcmp.summary(dec, "2024-01-01")
+    st.markdown(
+        "**Question.** Sellers of S&P 500 variance (VIX² against what the index then realizes) earn a premium. "
+        "Index variance is built from two inputs, single-name vols and their correlation, so the premium can be split "
+        "exactly into what the market overcharged for each. Implied single-name variances have no free history: they are "
+        "rebuilt from VIX and COR1M the way CBOE builds COR1M, then converted to variance-swap levels with the index and "
+        "single-name smiles measured on the 50 live chains."
+    )
+    m = st.columns(4)
+    m[0].metric("Premium 2015-2023", f"{pre['avg_total']:.0f} var pts", f"{pre['total_positive_%']:.0f}% of days positive", delta_color="off")
+    m[1].metric("of which correlation", f"{pre['avg_corr']:+.0f}", f"{pre['corr_positive_%']:.0f}% of days positive", delta_color="off")
+    m[2].metric("of which single-name vol", f"{pre['avg_single']:+.0f}", f"{pre['single_positive_%']:.0f}% of days positive", delta_color="off")
+    m[3].metric("Since 2024: correlation / single", f"{post['avg_corr']:+.0f} / {post['avg_single']:+.0f}",
+                f"premium {post['avg_total']:.0f}", delta_color="off")
+    st.plotly_chart(charts.premium_split_by_year(dcmp.by_period(dec, start=str(pd.Timestamp(bt_start).year))), use_container_width=True)
+    st.markdown(
+        "**Reading.** The correlation part is positive in almost every year: the market charges for correlation, reliably. "
+        "The single-name part swings around zero and is negative in most years: single-name variance is not reliably overpriced. "
+        "This is the Driessen, Maenhout and Vilkov (2009) result, *the index variance premium is a correlation premium*, "
+        "rebuilt here from free data. Since 2024 the correlation part has shrunk and the single-name part has grown: with COR1M "
+        "at record lows, part of what index variance sellers earn now comes from single-name vol (AI megacaps, earnings)."
+    )
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(charts.model_free_correlation(dec[dec.index >= pd.Timestamp(bt_start)]), use_container_width=True)
+    c2.plotly_chart(charts.single_iv_vs_rv(dec[dec.index >= pd.Timestamp(bt_start)]), use_container_width=True)
+    st.caption("Left: the model-free implied correlation sits above COR1M because index skew is steeper than single-name skew. "
+               "Crash protection on the index is, for the most part, protection against correlation going to one.")
+    legs = dcmp.monthly_legs(dec, start=str(pd.Timestamp(bt_start).date()))
+    st.plotly_chart(charts.legs_cumulative(legs), use_container_width=True)
+    ls = dcmp.leg_stats(legs)
+    st.dataframe(ls.style.format({"avg": "{:.0f}", "vol": "{:.0f}", "sharpe": "{:.2f}", "hit_%": "{:.0f}", "worst": "{:.0f}",
+                                  "share_of_tail_losses_%": "{:.0f}"}), use_container_width=True)
+    st.markdown(
+        "**Risk.** The two parts are the attribution of a short index variance position, not two separately tradable P&Ls "
+        "(a real dispersion book also pays 50 bid-ask spreads). In the worst 5% of months for index variance sellers, most of the "
+        "loss is attributed to single-name vols exploding, not to correlation: the correlation part is the steady earner."
+    )
+    st.subheader("Is it robust?")
+    st.markdown(
+        "Two choices drive the levels. **Calibration**: c_I is SPY at-the-money vol over SPY model-free vol (0.79 measured), "
+        "c_S is single-name model-free over at-the-money vol (1.13 measured, 1.06 for the median name); both are treated as "
+        "constants. **Basket**: today's top 50 are survivors whose high pre-megacap vol (NVDA, TSLA, AVGO...) inflates "
+        "realized single-name vol before 2024; the 31 names already in the top 50 in 2015 remove that bias but miss the names "
+        "driving index variance after 2024."
+    )
+    st.dataframe(rob.style.format({c: "{:.0f}" for c in rob.columns if c not in ("basket", "c_I", "c_S")} | {"c_I": "{:.2f}", "c_S": "{:.2f}"}),
+                 use_container_width=True, hide_index=True)
+    st.markdown(
+        "What survives every row: the correlation part is positive before 2024, and after 2024 it falls while the single-name "
+        "part rises. What does not: the size of that shift, and the sign of the single-name part. Report the direction, "
+        "not a point estimate."
+    )
+    with st.expander("Method in four lines"):
+        st.markdown(
+            "1. $V(\\sigma,\\rho) = B + \\rho(A-B)$ with $A=(\\sum w_i\\sigma_i)^2$, $B=\\sum w_i^2\\sigma_i^2$.  \n"
+            "2. Implied side at $t$: ATM single-name level solved from $c_I\\cdot$VIX and COR1M with the shape of 63-day realized vols, "
+            "scaled by $c_S$ to variance swaps; model-free $\\rho_Q$ solved from VIX².  \n"
+            "3. Realized side: the same quantities over $t+1 \\dots t+21$, index leg = SPY.  \n"
+            "4. Shapley split: correlation part $= (\\rho_Q-\\rho_P)\\cdot\\tfrac12[(A_Q-B_Q)+(A_P-B_P)]$, single-name part = the rest. "
+            "Validation on 27 Oct 2026: rebuilt average single-name variance-swap vol 41.1 against 41.6 replicated from the 49 chains; "
+            "the naive version (COR1M plugged straight into VIX) gives 46.7."
+        )
+
+# ---------- Mechanics ----------
+with tabs[6]:
     st.markdown(
         "The identity behind the trade, for weights $w_i$, vols $\\sigma_i$ and one average correlation $\\rho$:  \n"
         "$\\sigma_{index}^2 = \\rho\\,(\\sum_i w_i\\sigma_i)^2 + (1-\\rho)\\sum_i w_i^2\\sigma_i^2$  \n"

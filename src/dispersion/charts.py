@@ -228,3 +228,51 @@ def corr_vs_put_paths(fit: dict) -> go.Figure:
     fig.add_trace(go.Scatter(x=d.index, y=a, name="Short correlation", mode="lines", line=dict(width=1.8, color=C["blue"]), hovertemplate="%{y:.1f}"))
     fig.add_trace(go.Scatter(x=d.index, y=b, name="Short 15d put", mode="lines", line=dict(width=1.8, color=C["orange"]), hovertemplate="%{y:.1f}"))
     return fig
+
+
+# ---------- variance premium decomposition ----------
+
+def premium_split_by_year(by_year: pd.DataFrame) -> go.Figure:
+    fig = _base("Index variance premium by year: what correlation and single-name vol contributed", height=420,
+                yaxis=dict(gridcolor=GRID, zeroline=True, zerolinecolor=MUTED, ticksuffix=""), barmode="relative", bargap=0.25)
+    x = by_year.index.astype(str)
+    fig.add_trace(go.Bar(x=x, y=by_year["corr_part"], name="Correlation part", marker=dict(color=C["blue"], line=dict(width=0)),
+                         hovertemplate="%{y:.0f} var pts"))
+    fig.add_trace(go.Bar(x=x, y=by_year["single_part"], name="Single-name vol part", marker=dict(color=C["orange"], line=dict(width=0)),
+                         hovertemplate="%{y:.0f} var pts"))
+    fig.add_trace(go.Scatter(x=x, y=by_year["total"], name="Total premium (VIX² − realized)", mode="markers",
+                             marker=dict(symbol="diamond", size=9, color=TEXT, line=dict(width=2, color="white")),
+                             hovertemplate="%{y:.0f} var pts"))
+    fig.update_yaxes(title_text="variance points (vol² , annualized)")
+    return fig
+
+
+def legs_cumulative(legs: pd.DataFrame) -> go.Figure:
+    fig = _base("Monthly short positions, cumulative P&L in variance points", height=400,
+                yaxis=dict(gridcolor=GRID, zeroline=True, zerolinecolor=MUTED, ticksuffix=""))
+    for i, (c, name) in enumerate([("cum_total", "Short index variance"), ("cum_corr_part", "Short correlation part"),
+                                   ("cum_single_part", "Short single-name vol part")]):
+        fig.add_trace(go.Scatter(x=legs.index, y=legs[c], name=name, mode="lines",
+                                 line=dict(width=2 if i == 0 else 1.6, color=[TEXT, C["blue"], C["orange"]][i]),
+                                 hovertemplate="%{y:.0f}"))
+    return fig
+
+
+def model_free_correlation(dec: pd.DataFrame, smooth: int = 63) -> go.Figure:
+    fig = _base(f"Correlation: model-free, COR1M, realized ({smooth}d avg)", height=400)
+    d = dec.rolling(smooth).mean()
+    for i, (c, name) in enumerate([("rho_q", "Model-free implied (variance swaps)"), ("rho_atm", "COR1M (at-the-money)"),
+                                   ("rho_p", "Realized next 21d")]):
+        fig.add_trace(go.Scatter(x=d.index, y=d[c] * 100, name=name, mode="lines",
+                                 line=dict(width=1.8, color=[C["red"], C["violet"], C["blue"]][i]), hovertemplate="%{y:.1f}%"))
+    return fig
+
+
+def single_iv_vs_rv(dec: pd.DataFrame, smooth: int = 63) -> go.Figure:
+    fig = _base(f"Single-name vol: implied vs realized ({smooth}d avg)", height=400)
+    d = dec.rolling(smooth).mean()
+    fig.add_trace(go.Scatter(x=d.index, y=d["avg_single_iv"], name="Implied, rebuilt", mode="lines",
+                             line=dict(width=1.8, color=C["orange"]), hovertemplate="%{y:.1f}%"))
+    fig.add_trace(go.Scatter(x=d.index, y=d["avg_single_rv_fwd"], name="Realized next 21d", mode="lines",
+                             line=dict(width=1.6, color=C["blue"]), hovertemplate="%{y:.1f}%"))
+    return fig
