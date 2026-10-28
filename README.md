@@ -2,6 +2,8 @@
 
 **Live morning sheet: [https://morning-sheet-olive.vercel.app/dispersion](https://morning-sheet-olive.vercel.app/dispersion)**, regenerated every weekday after the US close.
 
+**Interactive app: [lonb3k-dispersion.streamlit.app](https://lonb3k-dispersion.streamlit.app)**, opens on the committed data, no install needed.
+
 ![morning sheet](docs/morning_sheet.gif)
 
 Streamlit app that rebuilds the CBOE implied correlation index from live option chains,

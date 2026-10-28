@@ -345,5 +345,5 @@ def build_sheet(offline: bool = False, top_n: int = 50, tenor: int = 30) -> dict
             "Option quotes from Yahoo are delayed; after the close most chains have no bid-ask and IVs come from last trades.",
         ],
         "warnings": warnings_,
-        "links": {"repo": REPO_URL, "streamlit": "streamlit run app.py (port 8502)"},
+        "links": {"repo": REPO_URL, "streamlit": "https://lonb3k-dispersion.streamlit.app"},
     }
