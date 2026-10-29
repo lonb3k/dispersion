@@ -23,7 +23,7 @@ jobs:
       - name: Commit history and sheet
         run: |
           git config user.name "corr-bot"
-          git config user.email "corr-bot@users.noreply.github.com"
+          git config user.email "corr-bot@localhost"
           git add data/implied_corr_history.csv data/implied_snapshot_*.csv data/weights_top50.csv sheet/latest.json
           git diff --cached --quiet || git commit -m "Implied correlation snapshot and morning sheet $(date -u +%F)"
           git push
